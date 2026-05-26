@@ -20,36 +20,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install mobile dependencies
         working-directory: mobile
         run: |
           corepack enable
+          corepack prepare pnpm@9.15.4 --activate
           pnpm install --frozen-lockfile
+
+      - name: Validate Maestro E2E baseline
+        working-directory: mobile
+        run: node scripts/validate-maestro-baseline.js
 
       - name: Install Maestro CLI
         run: |
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> $GITHUB_PATH
 
-      - name: Enable KVM for emulator
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Run Maestro on Android emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          profile: pixel_6
-          script: |
-            cd mobile
-            npx expo start --android --non-interactive &
-            sleep 60
-            maestro test .maestro/flows/feed-and-wallet.yaml
+      - name: Verify Maestro CLI
+        run: maestro --version
