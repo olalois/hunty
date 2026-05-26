@@ -6,13 +6,13 @@ import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Header } from "@/components/Header"
 import { HuntDashboard } from "@/components/HuntDashboard"
+import type { StoredHunt } from "@/lib/types"
 import {
   getCreatorHunts,
   updateHuntStatus,
   saveClueLocally,
   takeHuntStoreSnapshot,
   restoreHuntStoreSnapshot,
-  type StoredHunt,
 } from "@/lib/huntStore"
 import { activateHunt, addClue } from "@/lib/contracts/hunt"
 import { withTransactionToast } from "@/lib/txToast"
@@ -35,11 +35,14 @@ export default function DashboardPage() {
 
     try {
       await withTransactionToast(
-        () => activateHunt(huntId),
+        async (setStage) => {
+          setStage("approving")
+          return activateHunt(huntId)
+        },
         {
-          loading: "Confirming in Wallet...",
-          submitted: "Transaction Submitted",
-          success: "Hunt activated. It is now visible in the Game Arcade.",
+          pending: "Pending — preparing transaction…",
+          approving: "Approving — sign in your wallet…",
+          confirmed: "Confirmed! Hunt is now visible in the Game Arcade.",
         }
       )
     } catch (error) {
@@ -71,11 +74,14 @@ export default function DashboardPage() {
       try {
         for (const clue of normalizedClues) {
           await withTransactionToast(
-            () => addClue(huntId, clue.question, clue.answer, clue.points),
+            async (setStage) => {
+              setStage("approving")
+              return addClue(huntId, clue.question, clue.answer, clue.points)
+            },
             {
-              loading: `Adding clue "${clue.question.slice(0, 30)}..."`,
-              submitted: "Clue submitted",
-              success: "",
+              pending: `Pending — preparing clue "${clue.question.slice(0, 30)}…"`,
+              approving: "Approving — sign in your wallet…",
+              confirmed: "Clue confirmed!",
             }
           )
         }

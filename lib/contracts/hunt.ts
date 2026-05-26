@@ -1,85 +1,17 @@
-import Server, { TransactionBuilder, Networks, Operation, Account } from "@stellar/stellar-sdk"
+import Server, { TransactionBuilder, Operation, Account } from "@stellar/stellar-sdk"
 import { getHunt as getStoredHunt, getHuntClues } from "@/lib/huntStore"
-import { parseStellarError } from "@/lib/stellarErrors"
 import { withSorobanRpcRetry } from "@/lib/soroban/rpcRetry"
+import { normalizeNetworkError, AnswerIncorrectError } from "./errors"
+import { SOROBAN_RPC_URL, NETWORK_PASSPHRASE } from "./config"
+import { getActiveWalletAdapter } from "@/lib/walletAdapter"
 
-export type ClueInfo = {
-  id: number
-  question: string
-  points: number
-  hint?: string
-  hintCost?: number
-}
+import type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, LeaderboardEntry } from "@/lib/types"
 
-export type HuntInfo = {
-  id: number
-  title: string
-  description: string
-  totalClues: number
-  status: string
-}
+export type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, LeaderboardEntry }
 
-export type CreateHuntResult = {
-  txHash: string
-}
-
-/**
- * Thrown when the contract returns an AnswerIncorrect error for submit_answer.
- * Callers should catch this specifically to show a "Try Again" UI without reloading.
- */
-export class AnswerIncorrectError extends Error {
-  constructor() {
-    super("AnswerIncorrect: the submitted answer does not match.")
-    this.name = "AnswerIncorrectError"
-  }
-}
-
-const HUNT_FETCH_NETWORK_PATTERNS = [
-  /network( request)? (error|failed)/i,
-  /failed to fetch/i,
-  /fetch failed/i,
-  /request failed/i,
-  /rpc.*timed? out/i,
-  /timed? out/i,
-  /timeout/i,
-  /socket hang up/i,
-  /econn(reset|refused)/i,
-  /enotfound/i,
-  /ehostunreach/i,
-  /offline/i,
-]
-
-function normalizeHuntFetchError(error: unknown, fallbackMessage: string): Error {
-  const parsed = parseStellarError(error)
-  const errMessage =
-    error instanceof Error ? error.message : typeof error === "string" ? error : ""
-
-  const anyErr = error as
-    | {
-        response?: { status?: number }
-        status?: number
-      }
-    | undefined
-  const status = anyErr?.response?.status ?? anyErr?.status
-
-  if (
-    parsed.code === "TX_TIMEOUT" ||
-    status === 408 ||
-    status === 504 ||
-    HUNT_FETCH_NETWORK_PATTERNS.some((pattern) => pattern.test(errMessage))
-  ) {
-    return new Error("Network Error")
-  }
-
-  if (error instanceof Error) return error
-  return new Error(fallbackMessage)
-}
-
-export type SubmitAnswerResult = {
-  txHash: string
-  /** The contract event emitted on success. */
-  event: "ClueCompleted"
-}
+// AnswerIncorrectError is re-exported from the central errors module for
+// backwards-compatible imports (e.g. `import { AnswerIncorrectError } from "@/lib/contracts/hunt"`).
+export { AnswerIncorrectError }
 
 // Soroban-friendly createHunt helper (testnet default).
 // This builds a small Stellar transaction (manageData) carrying the hunt
@@ -93,24 +25,16 @@ export async function createHunt(
   start_time: number,
   end_time: number,
   /** IPFS CID (or ipfs:// URI) for the hunt cover image, stored on-chain. */
-  imageCid?: string
+  imageCid?: string,
+  creatorEmail?: string,
+  emailNotifications?: boolean,
+  /** When true, the hunt is hidden from the public arcade. */
+  is_private?: boolean
 ): Promise<CreateHuntResult> {
   if (typeof window === "undefined") throw new Error("Browser environment required")
 
-  const RPC = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://rpc.testnet.soroban.stellar.org"
-  const server = new Server(RPC)
-
-  const anyWin = window as Window & {
-    freighter?: unknown
-    soroban?: unknown
-    sorobanWallet?: unknown
-  }
-  const wallet = anyWin.freighter || anyWin.soroban || anyWin.sorobanWallet
-  if (!wallet) {
-    throw new Error(
-      "No Soroban-compatible wallet detected (install Freighter or Soroban Wallet)."
-    )
-  }
+  const server = new Server(SOROBAN_RPC_URL)
+  const wallet = getActiveWalletAdapter()
 
   // Prepare the payload and encode as string (manageData value must be string/buffer)
   const payload = JSON.stringify({
@@ -121,25 +45,12 @@ export async function createHunt(
     start_time,
     end_time,
     ...(imageCid ? { image_cid: imageCid } : {}),
+    ...(creatorEmail ? { creator_email: creatorEmail } : {}),
+    ...(emailNotifications !== undefined ? { email_notifications: emailNotifications } : {}),
+    ...(is_private ? { is_private: true } : {}),
   })
 
-  // Ask the wallet for the public key. Different wallets expose slightly
-  // different APIs; we try common ones (Freighter, Soroban wallet adapter).
-  let publicKey: string | undefined
-  if (wallet.getPublicKey) {
-    publicKey = await wallet.getPublicKey()
-  } else if (wallet.request && typeof wallet.request === "function") {
-    try {
-      const resp = await wallet.request({ method: "getPublicKey" })
-      publicKey = resp
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!publicKey) {
-    throw new Error("Unable to obtain public key from wallet; ensure you are connected.")
-  }
+  const publicKey = await wallet.getPublicKey()
 
   // Load account state
   const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
@@ -152,7 +63,7 @@ export async function createHunt(
 
   const tx = new TransactionBuilder(account, {
     fee: "100",
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(op)
     .setTimeout(180)
@@ -160,14 +71,7 @@ export async function createHunt(
 
   // Wallet signing: errors (including user rejection) are intentionally allowed
   // to propagate so withTransactionToast can classify and display them.
-  let signedXdr: string
-  if (wallet.signTransaction) {
-    signedXdr = await wallet.signTransaction(tx.toXDR())
-  } else if (wallet.request && typeof wallet.request === "function") {
-    signedXdr = await wallet.request({ method: "signTransaction", params: { tx: tx.toXDR() } })
-  } else {
-    throw new Error("No signing method available. Install Freighter or Soroban Wallet.")
-  }
+  const signedXdr = await wallet.signTransaction(tx.toXDR())
 
   // Submit signed transaction XDR to RPC
   const res = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
@@ -178,10 +82,6 @@ export async function createHunt(
   return { txHash: res.hash }
 }
 
-export type ActivateHuntResult = {
-  txHash: string
-}
-
 /**
  * Calls the smart contract's activate_hunt(hunt_id: u64) to transition a hunt
  * from Draft to Active. Requires wallet and Soroban RPC.
@@ -189,32 +89,9 @@ export type ActivateHuntResult = {
 export async function activateHunt(huntId: number): Promise<ActivateHuntResult> {
   if (typeof window === "undefined") throw new Error("Browser environment required")
 
-  const RPC = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://rpc.testnet.soroban.stellar.org"
-  const server = new Server(RPC)
-
-  const win = window as Window & { freighter?: unknown; soroban?: unknown; sorobanWallet?: unknown }
-  const wallet = win.freighter ?? win.soroban ?? win.sorobanWallet
-  if (!wallet) {
-    throw new Error(
-      "No Soroban-compatible wallet detected (install Freighter or Soroban Wallet)."
-    )
-  }
-
-  let publicKey: string | undefined
-  const w = wallet as { getPublicKey?: () => Promise<string>; request?: (arg: { method: string }) => Promise<string> }
-  if (w.getPublicKey) {
-    publicKey = await w.getPublicKey()
-  } else if (typeof w.request === "function") {
-    try {
-      publicKey = await w.request({ method: "getPublicKey" })
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!publicKey) {
-    throw new Error("Unable to obtain public key from wallet; ensure you are connected.")
-  }
+  const server = new Server(SOROBAN_RPC_URL)
+  const wallet = getActiveWalletAdapter()
+  const publicKey = await wallet.getPublicKey()
 
   const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
   const payload = JSON.stringify({ action: "activate_hunt", hunt_id: huntId })
@@ -223,31 +100,19 @@ export async function activateHunt(huntId: number): Promise<ActivateHuntResult> 
 
   const tx = new TransactionBuilder(account, {
     fee: "100",
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(op)
     .setTimeout(180)
     .build()
 
-  const signWallet = wallet as { signTransaction?: (xdr: string) => Promise<string>; request?: (arg: { method: string; params?: { tx: string } }) => Promise<string> }
-  let signedXdr: string
-  if (signWallet.signTransaction) {
-    signedXdr = await signWallet.signTransaction(tx.toXDR())
-  } else if (typeof signWallet.request === "function") {
-    signedXdr = await signWallet.request({ method: "signTransaction", params: { tx: tx.toXDR() } })
-  } else {
-    throw new Error("No signing method available. Install Freighter or Soroban Wallet.")
-  }
+  const signedXdr = await wallet.signTransaction(tx.toXDR())
 
   const res = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
     hash?: string
   }
   if (!res?.hash) throw new Error("Transaction submission failed")
   return { txHash: res.hash }
-}
-
-export type AddClueResult = {
-  txHash: string
 }
 
 /**
@@ -264,30 +129,9 @@ export async function addClue(
 ): Promise<AddClueResult> {
   if (typeof window === "undefined") throw new Error("Browser environment required")
 
-  const RPC = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://rpc.testnet.soroban.stellar.org"
-  const server = new Server(RPC)
-
-  const win = window as Window & { freighter?: unknown; soroban?: unknown; sorobanWallet?: unknown }
-  const wallet = win.freighter ?? win.soroban ?? win.sorobanWallet
-  if (!wallet) {
-    throw new Error("No Soroban-compatible wallet detected (install Freighter or Soroban Wallet).")
-  }
-
-  let publicKey: string | undefined
-  const w = wallet as { getPublicKey?: () => Promise<string>; request?: (arg: { method: string }) => Promise<string> }
-  if (w.getPublicKey) {
-    publicKey = await w.getPublicKey()
-  } else if (typeof w.request === "function") {
-    try {
-      publicKey = await w.request({ method: "getPublicKey" })
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!publicKey) {
-    throw new Error("Unable to obtain public key from wallet; ensure you are connected.")
-  }
+  const server = new Server(SOROBAN_RPC_URL)
+  const wallet = getActiveWalletAdapter()
+  const publicKey = await wallet.getPublicKey()
 
   const normalizedAnswer = answer.trim().toLowerCase()
 
@@ -306,24 +150,13 @@ export async function addClue(
 
   const tx = new TransactionBuilder(account, {
     fee: "100",
-    networkPassphrase: Networks.TESTNET,
+    networkPassphrase: NETWORK_PASSPHRASE,
   })
     .addOperation(op)
     .setTimeout(180)
     .build()
 
-  const signWallet = wallet as {
-    signTransaction?: (xdr: string) => Promise<string>
-    request?: (arg: { method: string; params?: { tx: string } }) => Promise<string>
-  }
-  let signedXdr: string
-  if (signWallet.signTransaction) {
-    signedXdr = await signWallet.signTransaction(tx.toXDR())
-  } else if (typeof signWallet.request === "function") {
-    signedXdr = await signWallet.request({ method: "signTransaction", params: { tx: tx.toXDR() } })
-  } else {
-    throw new Error("No signing method available. Install Freighter or Soroban Wallet.")
-  }
+  const signedXdr = await wallet.signTransaction(tx.toXDR())
 
   const res2 = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
     hash?: string
@@ -332,20 +165,12 @@ export async function addClue(
   return { txHash: res2.hash }
 }
 
-export type LeaderboardEntry = {
-  address: string
-  name?: string
-  points: number
-}
-
 /**
  * Retrieves the hunt leaderboard. 
  * Attempts to fetch "live" data from the contract account's data attributes 
  * (leveraging the manageData pattern) with a robust mock data fallback.
  */
 export async function get_hunt_leaderboard(huntId: number): Promise<LeaderboardEntry[]> {
-  void huntId
-
   // Simulate network latency
   await new Promise((resolve) => setTimeout(resolve, 800))
 
@@ -357,6 +182,20 @@ export async function get_hunt_leaderboard(huntId: number): Promise<LeaderboardE
     { address: "GFA...789", name: "BobHunts", points: 41 },
     { address: "GCA...HB2", points: 28 },
   ]
+
+  if (typeof window !== "undefined") {
+    try {
+      const myPointsStr = localStorage.getItem(`hunt_${huntId}_my_points`)
+      if (myPointsStr) {
+        const myPoints = parseInt(myPointsStr, 10)
+        if (myPoints > 0) {
+          mockData.push({ address: "YOU...PLYR", name: "You (Current Player)", points: myPoints })
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch leaderboard:", e)
+    }
+  }
 
   return mockData
 }
@@ -378,9 +217,11 @@ export async function get_hunt(huntId: number): Promise<HuntInfo> {
       description: stored.description,
       totalClues: stored.cluesCount,
       status: stored.status,
+      creatorEmail: stored.creatorEmail,
+      emailNotifications: stored.emailNotifications,
     }
   } catch (error) {
-    throw normalizeHuntFetchError(error, "Failed to fetch hunt")
+    throw normalizeNetworkError(error, "Failed to fetch hunt")
   }
 }
 
@@ -396,6 +237,14 @@ export async function get_clue_info(huntId: number, clueId: number): Promise<Clu
     const clue = clues[clueId]
     if (!clue) throw new Error(`Clue ${clueId} not found for hunt ${huntId}`)
 
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(`hunt_clue_start_${huntId}_${clue.id}`, Date.now().toString())
+      } catch (e) {
+        console.error("Failed to set start time:", e)
+      }
+    }
+
     return {
       id: clue.id,
       question: clue.question,
@@ -404,7 +253,7 @@ export async function get_clue_info(huntId: number, clueId: number): Promise<Clu
       hintCost: clue.hintCost,
     }
   } catch (error) {
-    throw normalizeHuntFetchError(error, "Failed to fetch clue")
+    throw normalizeNetworkError(error, "Failed to fetch clue")
   }
 }
 
@@ -423,8 +272,39 @@ export async function submitAnswer(
   const clue = clues.find((c) => c.id === clueId)
   if (!clue) throw new Error(`Clue ${clueId} not found for hunt ${huntId}`)
 
-  if (answer.trim().toLowerCase() !== clue.answer.trim().toLowerCase()) {
+  const userAnswer = answer.trim().toLowerCase()
+  const possibleAnswers = clue.answer.toLowerCase().split("|").map((a) => a.trim())
+
+  if (!possibleAnswers.includes(userAnswer)) {
     throw new AnswerIncorrectError()
+  }
+
+  // Calculate speed bonus
+  let bonusPoints = 0;
+  if (typeof window !== "undefined") {
+    try {
+      const solvedKey = `hunt_clue_solved_${huntId}_${clue.id}`;
+      if (!localStorage.getItem(solvedKey)) {
+        const startTimeStr = localStorage.getItem(`hunt_clue_start_${huntId}_${clue.id}`);
+        if (startTimeStr) {
+          const startTime = parseInt(startTimeStr, 10);
+          const elapsedSeconds = (Date.now() - startTime) / 1000;
+          if (elapsedSeconds < 60) {
+            bonusPoints = Math.floor(60 - elapsedSeconds);
+          }
+        }
+        
+        // Add points to player's total for this hunt
+        const userPointsKey = `hunt_${huntId}_my_points`;
+        const currentPoints = parseInt(localStorage.getItem(userPointsKey) || "0", 10);
+        localStorage.setItem(userPointsKey, (currentPoints + clue.points + bonusPoints).toString());
+        
+        // Mark as solved
+        localStorage.setItem(solvedKey, "true");
+      }
+    } catch (e) {
+      console.error("Failed to update local clue state in localStorage after answer submission:", e)
+    }
   }
 
   return {

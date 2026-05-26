@@ -4,20 +4,12 @@ import { Button } from "@/components/ui/button"
 import { Plus, Minus } from "lucide-react"
 import Trash from "@/components/icons/trash"
 import Coin from "@/components/icons/Coin"
-import { ReactNode, useState } from "react"
+import { useState } from "react"
 import { useXlmUsdPrice } from "@/hooks/useXlmUsdPrice"
+import type { Reward, RewardPlayerProgress } from "@/lib/types"
+import { claimReward } from "@/lib/contracts/rewardManager"
 
-export interface Reward {
-  place: number
-  amount: number
-  icon: ReactNode
-}
-
-export interface PlayerProgress {
-  is_completed: boolean;
-  reward_claimed: boolean;
-  hunt_id?: number | string;
-}
+export type { Reward, RewardPlayerProgress as PlayerProgress }
 
 export interface RewardsPanelProps {
   rewards: Reward[];
@@ -25,7 +17,7 @@ export interface RewardsPanelProps {
   onAddReward?: () => void;
   onDeleteReward?: (place: number) => void;
   error?: string;
-  playerProgress?: PlayerProgress;
+  playerProgress?: RewardPlayerProgress;
   onClaimReward?: (hunt_id?: number | string) => Promise<void>;
 }
 
@@ -50,8 +42,14 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
       if (onClaimReward) {
         await onClaimReward(playerProgress?.hunt_id);
       } else {
-        // Simulate network/contract call
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (playerProgress?.hunt_id == null) {
+          throw new Error("Missing hunt_id for reward claim")
+        }
+        const parsed = Number(playerProgress.hunt_id)
+        if (Number.isNaN(parsed)) {
+          throw new Error("Invalid hunt_id for reward claim")
+        }
+        await claimReward(parsed)
       }
       setClaimed(true);
     } catch (e) {
@@ -59,7 +57,9 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
     } finally {
       setIsClaiming(false);
     }
-  };  return (
+  };
+
+  return (
     <div className="space-y-6">
       {rewards.length > 0 && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3">
@@ -72,7 +72,7 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
       )}
 
       {rewards.map((reward) => (
-        <div key={reward.place} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+        <div key={reward.place} className="flex items-center justify-between p-4 bg-gray-50 dark:bg-slate-900/50 rounded-lg border border-transparent dark:border-white/5">
           <div className="flex items-center gap-3">
             <span className="text-2xl">{reward.icon}</span>
             <span className="font-normal text-2xl bg-gradient-to-l from-[#3737A4] to-[#0C0C4F] text-transparent bg-clip-text">{reward.place == 1 && "1st"} {reward.place == 2 && "2nd"} {reward.place == 3 && "3rd"} {reward.place > 3 && `${reward.place}th`} Place</span>
@@ -83,15 +83,15 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
                 size="icon"
                 variant="ghost"
                 onClick={() => onUpdateReward(reward.place, reward.amount - 0.1)}
-                className="w-6 h-6 border-2 border-transparent bg-gradient-to-r from-[#0C0C4F] to-[#4A4AFF] bg-origin-border hover:opacity-80 rounded-lg"
+                className="w-6 h-6 border-2 border-transparent bg-origin-border hover:opacity-80 rounded-lg"
                 style={{
-                  background: 'linear-gradient(white, white) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box'
+                  background: 'linear-gradient(var(--background), var(--background)) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box'
                 }}  
               >
                 <Minus className="w-3 h-3" />
               </Button>
             )}
-              <div className="flex items-center gap-8 bg-white px-3 py-1 rounded border-b-2 border-transparent bg-gradient-to-r from-[#0C0C4F] to-[#4A4AFF] bg-[length:100%_2px] bg-no-repeat bg-bottom">
+              <div className="flex items-center gap-8 bg-white dark:bg-slate-950 px-3 py-1 rounded border-b-2 border-transparent bg-gradient-to-r from-[#0C0C4F] to-[#4A4AFF] bg-[length:100%_2px] bg-no-repeat bg-bottom">
                 <Coin/>
                 <div className="flex flex-col">
                   <span className="text-[16px] font-medium bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] text-transparent bg-clip-text">
@@ -109,9 +109,9 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
                 size="icon"
                 variant="ghost"
                 onClick={() => onUpdateReward(reward.place, reward.amount + 0.1)}
-                className="w-6 h-6 border-2 border-transparent bg-gradient-to-r from-[#0C0C4F] to-[#4A4AFF] bg-origin-border hover:opacity-80 rounded-lg"
+                className="w-6 h-6 border-2 border-transparent bg-origin-border hover:opacity-80 rounded-lg"
                 style={{
-                  background: 'linear-gradient(white, white) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box'
+                  background: 'linear-gradient(var(--background), var(--background)) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box'
                 }}
               >
                 <Plus className="w-3 h-3" />
@@ -133,7 +133,7 @@ export function RewardsPanel({ rewards, onUpdateReward, onAddReward, onDeleteRew
       {onAddReward && (
         <div className="flex flex-col gap-2">
           <Button
-              className="bg-white text-[#808080] text-[16px] font-medium hover:bg-gray-100 px-6 py-2 rounded-full border-2 border-dashed border-[#808080] cursor-pointer"
+              className="bg-white dark:bg-slate-900 text-[#808080] dark:text-slate-400 text-[16px] font-medium hover:bg-gray-100 dark:hover:bg-slate-800 px-6 py-2 rounded-full border-2 border-dashed border-[#808080] dark:border-slate-700 cursor-pointer"
               onClick={onAddReward}
                     >
               Add Reward for Runner-up

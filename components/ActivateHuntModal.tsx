@@ -32,12 +32,12 @@ export function ActivateHuntModal({
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-slate-600 text-lg">
+          <p className="text-slate-600 dark:text-slate-300 text-lg">
             Once activated, <strong>an active hunt cannot be edited.</strong> Players will be able to
             participate and it will appear in the public Game Arcade.
           </p>
           {huntTitle && (
-            <p className="text-slate-500 text-sm">
+            <p className="text-slate-500 dark:text-slate-400 text-sm italic">
               Hunt: &quot;{huntTitle}&quot;
             </p>
           )}

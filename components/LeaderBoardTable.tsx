@@ -1,25 +1,19 @@
 "use client"
 
-import { ReactNode, useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { get_hunt_leaderboard } from "@/lib/contracts/hunt"
 import Medal from "@/components/icons/Medal"
-
-interface LeaderboardEntry {
-  position: number
-  name: string
-  points: number
-  icon: ReactNode
-}
+import type { LeaderboardDisplayEntry } from "@/lib/types"
 
 interface LeaderboardTableProps {
   huntId?: number
-  data?: LeaderboardEntry[]
+  data?: LeaderboardDisplayEntry[]
   isLoading?: boolean
 }
 
 export function LeaderboardTable({ huntId, data: initialData, isLoading: initialLoading = false }: LeaderboardTableProps) {
-  const [data, setData] = useState<LeaderboardEntry[]>(initialData || [])
+  const [data, setData] = useState<LeaderboardDisplayEntry[]>(initialData || [])
   const [isLoading, setIsLoading] = useState(initialLoading)
   const [error, setError] = useState<string | null>(null)
 
@@ -41,7 +35,7 @@ export function LeaderboardTable({ huntId, data: initialData, isLoading: initial
       const sortedData = [...rawData].sort((a, b) => b.points - a.points)
 
       // Map to UI-friendly format (Requirement: Truncate wallet if no name)
-      const mappedData: LeaderboardEntry[] = sortedData.map((entry, index) => ({
+      const mappedData: LeaderboardDisplayEntry[] = sortedData.map((entry, index) => ({
         position: index + 1,
         name: entry.name || truncateAddress(entry.address),
         points: entry.points,
@@ -70,11 +64,11 @@ export function LeaderboardTable({ huntId, data: initialData, isLoading: initial
 
   if (error) {
     return (
-      <div className={`${containerClass} p-8 text-center bg-white rounded-xl border border-red-200`}>
-        <p className="text-red-500 font-medium">{error}</p>
+      <div className={`${containerClass} p-8 text-center bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/30`}>
+        <p className="text-red-500 dark:text-red-400 font-medium">{error}</p>
         <button
           onClick={() => fetchLeaderboard()}
-          className="mt-4 text-sm text-[#3737A4] hover:underline"
+          className="mt-4 text-sm text-[#3737A4] dark:text-blue-400 hover:underline"
         >
           Try again
         </button>
@@ -84,15 +78,15 @@ export function LeaderboardTable({ huntId, data: initialData, isLoading: initial
 
   if (!isLoading && data.length === 0) {
     return (
-      <div className={`${containerClass} p-12 text-center bg-white rounded-xl border border-dashed border-slate-300`}>
-        <p className="text-slate-500 font-medium">No players on the leaderboard yet. Be the first!</p>
+      <div className={`${containerClass} p-12 text-center bg-white dark:bg-slate-900 rounded-xl border border-dashed border-slate-300 dark:border-slate-700`}>
+        <p className="text-slate-500 dark:text-slate-400 font-medium">No players on the leaderboard yet. Be the first!</p>
       </div>
     )
   }
 
   return (
     <div className={containerClass}>
-      <table className="w-full rounded-none border-l border-[#808080] border-collapse">
+      <table className="w-full rounded-none border-l border-[#808080] dark:border-slate-700 border-collapse">
         <thead>
           <tr className="bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] text-white">
             <th className="px-4 py-2 text-center border border-r-2 border-white">Position</th>
@@ -103,16 +97,16 @@ export function LeaderboardTable({ huntId, data: initialData, isLoading: initial
         <tbody>
           {(isLoading && data.length === 0) ? (
             Array.from({ length: 5 }).map((_, index) => (
-              <tr key={`skeleton-${index}`} className="bg-white">
-                <td className="px-4 py-3 flex items-center justify-center gap-2 text-center border-r-2 border-[#808080] border-b-2">
-                  <Skeleton className="w-6 h-6 rounded-full bg-slate-200" />
-                  <Skeleton className="w-4 h-5 bg-slate-200" />
+              <tr key={`skeleton-${index}`} className="bg-white dark:bg-slate-900">
+                <td className="px-4 py-3 flex items-center justify-center gap-2 text-center border-r-2 border-[#808080] dark:border-slate-700 border-b-2">
+                  <Skeleton className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-800" />
+                  <Skeleton className="w-4 h-5 bg-slate-200 dark:bg-slate-800" />
                 </td>
-                <td className="px-4 py-3 border-r-2 border-[#808080] border-b-2">
-                  <Skeleton className="w-1/2 h-5 bg-slate-200" />
+                <td className="px-4 py-3 border-r-2 border-[#808080] dark:border-slate-700 border-b-2">
+                  <Skeleton className="w-1/2 h-5 bg-slate-200 dark:bg-slate-800" />
                 </td>
-                <td className="px-4 py-3 text-center border border-b-2 border-[#808080]">
-                  <Skeleton className="w-8 h-5 mx-auto bg-slate-200" />
+                <td className="px-4 py-3 text-center border border-b-2 border-[#808080] dark:border-slate-700">
+                  <Skeleton className="w-8 h-5 mx-auto bg-slate-200 dark:bg-slate-800" />
                 </td>
               </tr>
             ))
@@ -120,16 +114,16 @@ export function LeaderboardTable({ huntId, data: initialData, isLoading: initial
             data.map((entry, index) => {
               // Requirement: Visually distinguish rank 1, 2, and 3
               const isTop3 = entry.position <= 3;
-              const rowClass = isTop3 ? "bg-slate-50 font-bold" : "bg-white";
+              const rowClass = isTop3 ? "bg-slate-50 dark:bg-blue-900/10 font-bold" : "bg-white dark:bg-slate-900";
 
               return (
                 <tr key={index} className={rowClass}>
-                  <td className="px-4 py-2 flex items-center justify-center gap-2 text-center border-r-2 border-[#808080] border-b-2 ">
+                  <td className="px-4 py-2 flex items-center justify-center gap-2 text-center border-r-2 border-[#808080] dark:border-slate-700 border-b-2 ">
                     <span>{entry.icon}</span>
-                    <span className="text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] bg-clip-text text-transparent">{entry.position}</span>
+                    <span className="text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] dark:from-slate-200 dark:to-slate-400 bg-clip-text text-transparent">{entry.position}</span>
                   </td>
-                  <td className="px-4 py-2 border-r-2 border-[#808080] border-b-2 text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] bg-clip-text text-transparent">{entry.name}</td>
-                  <td className="px-4 py-2 text-center border border-b-2 border-[#808080] text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] bg-clip-text text-transparent">{entry.points}</td>
+                  <td className="px-4 py-2 border-r-2 border-[#808080] dark:border-slate-700 border-b-2 text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] dark:from-slate-200 dark:to-slate-400 bg-clip-text text-transparent">{entry.name}</td>
+                  <td className="px-4 py-2 text-center border border-b-2 border-[#808080] dark:border-slate-700 text-[16px] bg-gradient-to-b from-[#576065] to-[#787884] dark:from-slate-200 dark:to-slate-400 bg-clip-text text-transparent">{entry.points}</td>
                 </tr>
               )
             })

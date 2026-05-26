@@ -7,6 +7,8 @@ import { Header } from "@/components/Header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useFreighterWallet, shortenAddress } from "@/hooks/useFreighterWallet"
+import { NftGallery } from "@/components/NftGallery"
+import type { NftRewardDetail } from "@/components/NftDetailModal"
 
 type HuntProgressStatus = "Completed" | "In-Progress"
 
@@ -23,6 +25,8 @@ interface PlayerHuntProgress {
 
 // Temporary data fetcher; replace with real Soroban/indexer integration calling
 // `get_player_progress` for the connected player's address.
+type NftReward = NftRewardDetail
+
 async function fetchPlayerHunts(address: string): Promise<PlayerHuntProgress[]> {
   // In a real implementation this would:
   // 1. Fetch all hunts from your indexer or contract.
@@ -65,9 +69,57 @@ async function fetchPlayerHunts(address: string): Promise<PlayerHuntProgress[]> 
   ]
 }
 
+async function fetchPlayerRewards(address: string): Promise<NftReward[]> {
+  if (!address) return []
+
+  return [
+    {
+      id: 1,
+      name: "Golden Compass",
+      description: "A legendary artifact awarded to those who uncover all secret murals in the City Secrets hunt.",
+      imageUri: "/static-images/nft1.png",
+      earnedAt: "2026-02-10T15:16:00Z",
+      claimed: true,
+      huntName: "City Secrets",
+      attributes: [
+        { trait_type: "Rarity", value: "Legendary" },
+        { trait_type: "Type", value: "Utility" },
+      ]
+    },
+    {
+      id: 2,
+      name: "Explorer Trophy",
+      description: "Granted for successfully completing the Office Onboarding challenge within the time limit.",
+      imageUri: "/static-images/nft2.png",
+      earnedAt: "2026-02-20T11:26:00Z",
+      claimed: false,
+      huntName: "Office Onboarding",
+      attributes: [
+        { trait_type: "Rarity", value: "Rare" },
+        { trait_type: "Level", value: 5 },
+      ]
+    },
+    {
+      id: 3,
+      name: "Soroban Sage",
+      description: "Awarded to players who demonstrate exceptional knowledge of smart contract riddles.",
+      imageUri: "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG", // Example IPFS
+      earnedAt: "2026-03-05T09:45:00Z",
+      claimed: true,
+      huntName: "Stellar Developer Hunt",
+      attributes: [
+        { trait_type: "Rarity", value: "Epic" },
+        { trait_type: "Skill", value: "Contracting" },
+      ]
+    }
+  ]
+}
+
+
 export default function UserProfilePage() {
   const { connected, publicKey } = useFreighterWallet()
   const [hunts, setHunts] = useState<PlayerHuntProgress[]>([])
+  const [nftRewards, setNftRewards] = useState<NftReward[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,9 +139,9 @@ export default function UserProfilePage() {
         if (!cancelled) {
           setHunts(data)
         }
-      } catch (err: any) {
+      } catch (err) {
         if (!cancelled) {
-          setError(err?.message || "Failed to load profile data.")
+          setError(err instanceof Error ? err.message : "Failed to load profile data.")
         }
       } finally {
         if (!cancelled) {
@@ -98,7 +150,19 @@ export default function UserProfilePage() {
       }
     }
 
+    const loadRewards = async () => {
+      try {
+        const rewardsData = await fetchPlayerRewards(publicKey!)
+        if (!cancelled) {
+          setNftRewards(rewardsData)
+        }
+      } catch (err) {
+        console.error("Failed to load NFT rewards:", err)
+      }
+    }
+
     load()
+    loadRewards()
 
     return () => {
       cancelled = true
@@ -127,8 +191,11 @@ export default function UserProfilePage() {
       inProgressHunts,
       totalPoints,
       completionRate,
+      totalNftRewards: nftRewards.length,
+      claimedNftRewards: nftRewards.filter((nft) => nft.claimed).length,
+      unclaimedNftRewards: nftRewards.filter((nft) => !nft.claimed).length,
     }
-  }, [hunts])
+  }, [hunts, nftRewards])
 
   const completedHunts = hunts.filter((h) => h.status === "Completed")
   const inProgressHunts = hunts.filter((h) => h.status === "In-Progress")
@@ -194,12 +261,33 @@ export default function UserProfilePage() {
                       valueClassName="text-emerald-600"
                     />
                   </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+                    <StatPill label="NFT Rewards" value={summary.totalNftRewards ?? 0} />
+                    <StatPill label="NFTs Claimed" value={summary.claimedNftRewards ?? 0} />
+                    <StatPill label="NFTs Unclaimed" value={summary.unclaimedNftRewards ?? 0} />
+                  </div>
                   <div className="mt-4 text-sm text-slate-600">
                     Completion rate:{" "}
                     <span className="font-semibold text-slate-800">{summary.completionRate}%</span>
                   </div>
                 </CardContent>
               </Card>
+            </section>
+
+            <section aria-label="NFT Rewards" className="mt-8">
+              <div className="flex items-center justify-between gap-2 mb-6">
+                <div>
+                  <h2 className="text-xl md:text-2xl font-bold bg-linear-to-b from-[#3737A4] to-[#0C0C4F] bg-clip-text text-transparent">
+                    Digital Trophies
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">Collectible rewards earned through your achievements</p>
+                </div>
+                <span className="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-xs font-bold">
+                  {nftRewards.length} Unlocked
+                </span>
+              </div>
+              
+              <NftGallery nfts={nftRewards} />
             </section>
 
             <section aria-label="Hunt history" className="mt-10 space-y-8">

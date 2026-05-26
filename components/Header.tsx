@@ -7,10 +7,11 @@ import { useIsMounted } from "@/hooks/useIsMounted";
 import { useFreighterWallet } from "@/hooks/useFreighterWallet";
 import { WalletModal } from "./WalletModal";
 import { Copy, LogOut, Check } from "lucide-react";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function Header({ balance = "0" }: { balance?: string }) {
   const mounted = useIsMounted();
-  const { connected, displayKey, publicKey, connect, disconnect } =
+  const { connected, displayKey, publicKey, connect, disconnect, walletProvider } =
     useFreighterWallet();
   const [modalOpen, setModalOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -52,6 +53,8 @@ export function Header({ balance = "0" }: { balance?: string }) {
           Hunty
         </div>
 
+        <ThemeToggle />
+
         {mounted && connected ? (
           <div className="flex flex-row items-center gap-2 sm:gap-4 min-w-0 w-full sm:w-auto flex-1 justify-between sm:justify-end">
             {/* Balance pill */}
@@ -66,10 +69,10 @@ export function Header({ balance = "0" }: { balance?: string }) {
             <div className="relative flex-shrink-0" ref={dropdownRef}>
               <Button
                 onClick={() => setDropdownOpen((prev) => !prev)}
-                className="border-2 border-transparent hover:opacity-80 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 md:px-4 py-2 text-xs sm:text-sm md:text-base lg:text-xl justify-center"
+                className="border-2 border-transparent hover:opacity-80 flex items-center gap-1 sm:gap-2 px-2 sm:px-3 md:px-4 py-2 text-xs sm:text-sm md:text-base lg:text-xl justify-center bg-white dark:bg-slate-900"
                 style={{
                   background:
-                    "linear-gradient(white, white) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box",
+                    "linear-gradient(var(--background), var(--background)) padding-box, linear-gradient(to right, #0C0C4F, #4A4AFF) border-box",
                 }}
               >
                 <div className="w-3 h-3 sm:w-4 sm:h-4 md:w-5 md:h-5 lg:w-6 lg:h-6 rounded-full bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] flex-shrink-0" />
@@ -96,11 +99,14 @@ export function Header({ balance = "0" }: { balance?: string }) {
 
               {/* Dropdown panel */}
               {dropdownOpen && (
-                <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-slate-200 bg-white shadow-xl z-50 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-950 shadow-xl z-50 overflow-hidden backdrop-blur-xl">
                   {/* Header strip */}
                   <div className="px-4 py-3 bg-gradient-to-r from-[#0C0C4F] to-[#4A4AFF]">
                     <p className="text-xs text-blue-200 font-medium mb-1">
                       Connected wallet
+                    </p>
+                    <p className="text-[11px] uppercase tracking-wide text-blue-200/90 mb-1">
+                      {walletProvider ?? "freighter"}
                     </p>
                     <p className="text-white font-mono text-xs break-all leading-relaxed">
                       {publicKey}
@@ -111,21 +117,21 @@ export function Header({ balance = "0" }: { balance?: string }) {
                   <div className="p-2 flex flex-col gap-1">
                     <button
                       onClick={handleCopy}
-                      className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm text-slate-700 hover:bg-slate-100 transition-colors text-left"
+                      className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors text-left"
                     >
                       {copied ? (
                         <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
                       ) : (
-                        <Copy className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                        <Copy className="w-4 h-4 text-slate-400 dark:text-slate-500 flex-shrink-0" />
                       )}
                       <span>{copied ? "Copied!" : "Copy address"}</span>
                     </button>
 
-                    <div className="h-px bg-slate-100 mx-3" />
+                    <div className="h-px bg-slate-100 dark:bg-white/5 mx-3" />
 
                     <button
                       onClick={handleDisconnect}
-                      className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm text-red-600 hover:bg-red-50 transition-colors text-left font-medium"
+                      className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left font-medium"
                     >
                       <LogOut className="w-4 h-4 flex-shrink-0" />
                       <span>Disconnect wallet</span>
@@ -149,7 +155,7 @@ export function Header({ balance = "0" }: { balance?: string }) {
       <WalletModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
-        onConnect={connect}
+        onConnect={(provider) => connect(provider)}
       />
     </>
   );

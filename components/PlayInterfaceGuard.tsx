@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { checkRegistrationStatus, RegistrationStatus } from "@/lib/contracts/player-registration";
+import { checkRegistrationStatus } from "@/lib/contracts/player-registration";
+import type { RegistrationStatus } from "@/lib/types";
 import { RegistrationButton } from "@/components/RegistrationButton";
 import { Loader2 } from "lucide-react";
 
@@ -71,9 +72,15 @@ export function PlayInterfaceGuard({
   // Show loading state while checking registration
   if (registrationStatus.loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
-        <p className="text-slate-600">Checking registration status...</p>
+      <div className="flex flex-col items-center justify-center min-h-[400px] w-full max-w-md mx-auto space-y-6 px-4">
+        <div className="w-full space-y-3">
+          <Skeleton className="h-8 w-3/4 mx-auto bg-slate-100 dark:bg-slate-800" />
+          <Skeleton className="h-4 w-full bg-slate-100 dark:bg-slate-800" />
+          <Skeleton className="h-4 w-5/6 mx-auto bg-slate-100 dark:bg-slate-800" />
+        </div>
+        <div className="w-full pt-4">
+          <Skeleton className="h-12 w-full rounded-2xl bg-slate-100 dark:bg-slate-800" />
+        </div>
       </div>
     );
   }

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import Image from "next/image"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -14,6 +15,10 @@ import { getAllHunts, type StoredHunt } from "@/lib/huntStore"
 import { LeaderboardTable } from "@/components/LeaderBoardTable"
 import { hankenGrotesk } from "@/lib/font"
 import OnboardingTour from "@/components/OnboardingTour"
+import { GlobalActivityFeed } from "@/components/GlobalActivityFeed"
+import { FeaturedHunts } from "@/components/FeaturedHunts"
+import { HuntCoverImage } from "@/components/HuntCoverImage"
+import { Footer } from "@/components/Footer"
 
 interface WalletOption {
   id: string
@@ -32,31 +37,40 @@ function sortByRecentFirst(a: StoredHunt, b: StoredHunt): number {
   return bSortTime - aSortTime
 }
 
-function fetchActiveHunts() {
-  return getAllHunts().filter((hunt) => hunt.status === "Active").sort(sortByRecentFirst)
+function fetchInactiveHunts() {
+  return getAllHunts()
+    .filter((hunt) => hunt.status !== "Active" && !hunt.is_private)
+    .sort(sortByRecentFirst)
 }
 
-function fetchInactiveHunts() {
-  return getAllHunts().filter((hunt) => hunt.status !== "Active").sort(sortByRecentFirst)
+// Active and Completed hunts for the public Game Arcade.
+// Private hunts (is_private=true) are excluded from the public arcade.
+function fetchAllHunts() {
+  return getAllHunts().filter((h) => (h.status === "Active" || h.status === "Completed") && !h.is_private)
 }
 
 export default function GameArcade() {
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false)
   const [isConnectingWallet, setIsConnectingWallet] = useState(false)
-  const [selectedWallet, setSelectedWallet] = useState<WalletOption | null>(null)
   const [displayName, setDisplayName] = useState("")
   const [gameLink, setGameLink] = useState("")
-  const [isConnected, setIsConnected] = useState(false)
   const [walletAddress, setWalletAddress] = useState("")
   const [balance, setBalance] = useState("")
 
-  const [activeHunts, setActiveHunts] = useState<StoredHunt[]>([])
   const [inactiveHunts, setInactiveHunts] = useState<StoredHunt[]>([])
-  const [isLoadingHunts, setIsLoadingHunts] = useState(true)
   const [visibleInactiveCount, setVisibleInactiveCount] = useState(INACTIVE_PAGE_SIZE)
   const [isLoadingMoreInactive, setIsLoadingMoreInactive] = useState(false)
-  const [activeTab, setActiveTab] = useState<"leaderboard" | "none">("none")
   const inactiveEndReachedRef = useRef<HTMLDivElement | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [activeTab, setActiveTab] = useState<"leaderboard" | "none">("none")
+  const [rewardFilter, setRewardFilter] = useState<"all" | "XLM" | "NFT" | "Both">("all")
+  const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Completed">("Active")
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "clues-high" | "clues-low">("newest")
+
+  const { data: hunts = [], isLoading: isLoadingHunts } = useQuery({
+    queryKey: ["activeHunts"],
+    queryFn: async () => fetchAllHunts(),
+  })
 
   const visibleInactiveHunts = useMemo(
     () => inactiveHunts.slice(0, visibleInactiveCount),
@@ -74,25 +88,9 @@ export default function GameArcade() {
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    try {
-      const active = fetchActiveHunts()
-      const inactive = fetchInactiveHunts()
-      if (!cancelled) {
-        setActiveHunts(active)
-        setInactiveHunts(inactive)
-        setVisibleInactiveCount(INACTIVE_PAGE_SIZE)
-      }
-    } catch (error) {
-      console.error("Failed to fetch hunts", error)
-    } finally {
-      if (!cancelled) setIsLoadingHunts(false)
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    setInactiveHunts(fetchInactiveHunts())
+    setVisibleInactiveCount(INACTIVE_PAGE_SIZE)
+  }, [hunts])
 
   const loadMoreInactiveHunts = useCallback(() => {
     if (!hasMoreInactiveHunts || isLoadingMoreInactive) return
@@ -120,35 +118,51 @@ export default function GameArcade() {
     return () => observer.disconnect()
   }, [hasMoreInactiveHunts, loadMoreInactiveHunts, visibleInactiveHunts.length])
 
-  const handleWalletSelect = (wallet: WalletOption) => {
-    setSelectedWallet(wallet)
+  const handleWalletSelect = () => {
     setIsConnectingWallet(true)
     // Simulate wallet address generation
     setWalletAddress("0xe5f...E5")
   }
 
   const handleContinue = () => {
-    setIsConnected(true)
     setBalance("24.2453")
     setIsWalletModalOpen(false)
     setIsConnectingWallet(false)
-    setSelectedWallet(null)
     setDisplayName("")
-  }
-
-  const handleDisconnect = () => {
-    setIsConnected(false)
-    setWalletAddress("")
-    setBalance("")
   }
 
   const handleCreateGame = () => {
     window.location.href = "/hunty"
   }
 
+  const filteredHunts = hunts
+    .filter((hunt) => {
+      const matchesSearch =
+        hunt.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        hunt.description.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const matchesReward =
+        rewardFilter === "all" ||
+        hunt.rewardType === rewardFilter ||
+        (rewardFilter !== "Both" && hunt.rewardType === "Both") ||
+        (rewardFilter === "Both" && hunt.rewardType === "Both");
+  
+      const matchesStatus =
+        statusFilter === "all" || hunt.status === statusFilter;
+  
+      return matchesSearch && matchesReward && matchesStatus;
+    })
+    .sort((a, b) => {
+      if (sortBy === "newest") return (b.startTime || 0) - (a.startTime || 0);
+      if (sortBy === "oldest") return (a.startTime || 0) - (b.startTime || 0);
+      if (sortBy === "clues-high") return b.cluesCount - a.cluesCount;
+      if (sortBy === "clues-low") return a.cluesCount - b.cluesCount;
+      return 0;
+    });
+
   return (
     <div
-      className={`min-h-screen bg-gradient-to-tr from-blue-100 bg-purple-100 to-[#f9f9ff] pb-[75px]`}
+      className={`min-h-screen bg-gradient-to-tr from-blue-100 bg-purple-100 to-[#f9f9ff] dark:from-slate-900 dark:bg-slate-900 dark:to-slate-800 pb-[75px]`}
     >
       <OnboardingTour />
       {/* Header */}
@@ -157,7 +171,7 @@ export default function GameArcade() {
       />
 
       {/* Main Content */}
-      <div className="max-w-[1600px] px-14 pt-10 pb-12 bg-white mx-auto rounded-4xl relative">
+      <div className="max-w-[1600px] px-14 pt-10 pb-12 bg-white dark:bg-slate-900 mx-auto rounded-4xl relative">
         {/* Logo and Title */}
         <div className="text-center mb-8">
           <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 border-4 border-[#0C0C4F] shadow-lg absolute left-1/2 top-1 -translate-x-1/2 -translate-y-1/2">
@@ -278,15 +292,92 @@ export default function GameArcade() {
 
         </div>
 
+        {/* Global Activity Feed */}
+        <div className="mt-10 mb-10">
+          <GlobalActivityFeed />
+        </div>
+
+        {/* Featured Hunts Hero Section */}
+        <FeaturedHunts />
+
         {/* Active Hunts Grid */}
         <div className="mt-10">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl md:text-3xl font-semibold bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] bg-clip-text text-transparent">
-              Browse Active Hunts
-            </h2>
-            <p className="text-sm text-slate-600">
-              {isLoadingHunts ? "Loading hunts..." : `${activeHunts.length} active ${activeHunts.length === 1 ? "hunt" : "hunts"} found`}
-            </p>
+          <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-6 border-b border-slate-100 dark:border-white/5 pb-8">
+            <div>
+              <h2 className="text-2xl md:text-3xl font-bold bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] bg-clip-text text-transparent">
+                Discovery Arcade
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Find the perfect challenge for you</p>
+            </div>
+            
+            <div className="flex flex-col xl:flex-row items-center gap-4 w-full md:w-auto">
+              {/* Status Filter */}
+              <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl w-full sm:w-auto">
+                {(["all", "Active", "Completed"] as const).map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => setStatusFilter(status)}
+                    className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                      statusFilter === status
+                        ? "bg-white dark:bg-slate-700 text-[#3737A4] shadow-sm"
+                        : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    {status === "all" ? "All" : status === "Active" ? "Live" : "Ended"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Reward Filter */}
+              <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl w-full sm:w-auto">
+                {(["all", "XLM", "NFT", "Both"] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setRewardFilter(type)}
+                    className={`flex-1 px-4 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                      rewardFilter === type
+                        ? "bg-white dark:bg-slate-700 text-[#3737A4] shadow-sm"
+                        : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    {type === "all" ? "All Prizes" : type}
+                  </button>
+                ))}
+              </div>
+
+              {/* Search and Sort */}
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative flex-1 sm:w-64">
+                  <Input
+                    placeholder="Search title..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 focus:border-[#3737A4] focus:ring-[#3737A4] pl-3 h-10 rounded-xl"
+                  />
+                </div>
+                
+                <select
+                  value={sortBy}
+                  onChange={(e) =>
+                    setSortBy(e.target.value as "newest" | "oldest" | "clues-high" | "clues-low")
+                  }
+                  className="h-10 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 text-xs font-bold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-[#3737A4]/50 cursor-pointer"
+                >
+                  <option value="newest">Newest First</option>
+                  <option value="oldest">Oldest First</option>
+                  <option value="clues-high">Most Clues</option>
+                  <option value="clues-low">Fewest Clues</option>
+                </select>
+              </div>
+
+              {isLoadingHunts ? (
+                <Skeleton className="h-4 w-24 bg-slate-200 dark:bg-slate-700" />
+              ) : (
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider hidden xl:block">
+                  {filteredHunts.length} result{filteredHunts.length === 1 ? "" : "s"}
+                </p>
+              )}
+            </div>
           </div>
 
           {isLoadingHunts ? (
@@ -308,29 +399,43 @@ export default function GameArcade() {
                 </Card>
               ))}
             </div>
-          ) : activeHunts.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/80 py-10 text-center text-slate-600">
-              No active hunts available right now.{" "}
-              <span className="font-semibold text-[#3737A4]">Be the first to create one!</span>
+          ) : filteredHunts.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 bg-slate-50/80 dark:bg-slate-800/50 py-10 text-center text-slate-600 dark:text-slate-400">
+              {searchQuery ? "No hunts match your search query." : "No active hunts available right now."}{" "}
+              {!searchQuery && <span className="font-semibold text-[#3737A4]">Be the first to create one!</span>}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {activeHunts.map((hunt) => (
+              {filteredHunts.map((hunt) => (
                 <Card
                   key={hunt.id}
-                  className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-shadow"
+                  className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow"
                 >
+                  <HuntCoverImage
+                    src={hunt.coverImageCid}
+                    alt={`${hunt.title} cover`}
+                    className="relative w-full h-40 bg-slate-100"
+                  />
                   <div className="p-5">
-                    <CardTitle className="text-lg font-semibold mb-2 line-clamp-2">
+                    <CardTitle className="text-lg font-semibold mb-2 line-clamp-2 dark:text-slate-100">
                       {hunt.title}
                     </CardTitle>
-                    <CardDescription className="text-sm text-slate-600 mb-4 line-clamp-3">
+                    <CardDescription className="text-sm text-slate-600 dark:text-slate-400 mb-4 line-clamp-3">
                       {hunt.description}
                     </CardDescription>
                     <div className="flex items-center justify-between mt-4">
-                      <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-medium text-[#3737A4]">
-                        {hunt.cluesCount} {hunt.cluesCount === 1 ? "Clue" : "Clues"}
-                      </span>
+                      <div className="flex gap-2 items-center">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-[11px] font-medium text-[#3737A4]">
+                          {hunt.cluesCount} {hunt.cluesCount === 1 ? "Clue" : "Clues"}
+                        </span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium ${
+                          hunt.rewardType === "XLM" ? "bg-green-50 text-green-700" :
+                          hunt.rewardType === "NFT" ? "bg-purple-50 text-purple-700" :
+                          "bg-amber-50 text-amber-700"
+                        }`}>
+                          {hunt.rewardType} Reward
+                        </span>
+                      </div>
                       <div className="flex gap-2">
                         <Button
                           size="sm"
@@ -451,7 +556,7 @@ export default function GameArcade() {
                 walletOptions.map((wallet) => (
                   <Button
                     key={wallet.id}
-                    onClick={() => handleWalletSelect(wallet)}
+                    onClick={() => handleWalletSelect()}
                     className="w-full bg-[#0C0C4F] hover:bg-slate-700 text-white p-4 rounded-lg flex items-center gap-3 justify-start px-6 py-6"
                   >
                     <span className="text-xl">{wallet.icon}</span>
@@ -497,6 +602,8 @@ export default function GameArcade() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Footer />
     </div>
   )
 }

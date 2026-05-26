@@ -1,45 +1,15 @@
 import Server, { TransactionBuilder, Operation } from "@stellar/stellar-sdk"
 import { getSorobanNetworkPassphrase, getSorobanRpcUrl } from "../soroban/client"
 import { withSorobanRpcRetry } from "../soroban/rpcRetry"
+import { RegistrationError } from "@/lib/contracts/errors"
 
-/**
- * Player progress data structure returned by the contract
- */
-export type PlayerProgress = {
-  hunt_id: number
-  player: string
-  current_clue_index: number
-  completed: boolean
-}
+import type { PlayerProgress, RegistrationStatus, RegistrationResult } from "@/lib/types"
 
-/**
- * Registration status information
- */
-export type RegistrationStatus = {
-  isRegistered: boolean
-  progressData?: PlayerProgress
-  loading: boolean
-  error?: string
-}
+export type { PlayerProgress, RegistrationStatus, RegistrationResult }
 
-/**
- * Result of a registration attempt
- */
-export type RegistrationResult = {
-  success: boolean
-  error?: string
-  transactionHash?: string
-}
-
-/**
- * Custom error for registration failures
- */
-export class RegistrationError extends Error {
-  constructor(message: string, public readonly code?: string) {
-    super(message)
-    this.name = "RegistrationError"
-  }
-}
+// RegistrationError is re-exported from the central errors module for
+// backwards-compatible imports.
+export { RegistrationError }
 
 /**
  * Retry configuration for network operations
@@ -305,21 +275,30 @@ export async function getPlayerProgress(
   return withRetry(async () => {
     try {
       const rpcUrl = getSorobanRpcUrl()
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const server = new Server(rpcUrl)
 
       // In a real implementation, this would query the contract's get_player_progress function
       // For now, we simulate the contract call using the manageData pattern
-      const payload = JSON.stringify({
-        action: "get_player_progress",
-        hunt_id: huntId,
-        player: playerAddress,
-      })
+      if (typeof window !== "undefined") {
+        const userPointsKey = `hunt_${huntId}_my_points`;
+        const hasPoints = localStorage.getItem(userPointsKey) !== null;
+        
+        if (hasPoints) {
+          // If the player has points, they are registered
+          const isCompleted = localStorage.getItem(`hunt_completed_${huntId}`) === "true";
+          const isClaimed = localStorage.getItem(`hunt_reward_claimed_${huntId}`) === "true";
+          
+          return {
+            hunt_id: huntId,
+            player: playerAddress,
+            current_clue_index: 0, // Not strictly used for the claim check
+            completed: isCompleted,
+            reward_claimed: isClaimed,
+          };
+        }
+      }
 
-      // Simulate network latency
-      await new Promise((resolve) => setTimeout(resolve, 300))
-
-      // Mock response - in production this would parse the contract response
-      // Return null to indicate player is not registered
       return null
     } catch (error) {
       // Provide user-friendly error messages

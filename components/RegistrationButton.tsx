@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { RegistrationStatus } from "@/lib/contracts/player-registration";
+import type { RegistrationStatus } from "@/lib/types";
 
 interface RegistrationButtonProps {
   huntId: number;
@@ -13,7 +12,9 @@ interface RegistrationButtonProps {
 }
 
 export function RegistrationButton({
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   huntId,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   playerAddress,
   registrationStatus,
   onRegister,
@@ -44,9 +45,9 @@ export function RegistrationButton({
   // Show loading state during initial status check
   if (registrationStatus.loading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-slate-500">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        <span>Checking registration status...</span>
+      <div className="space-y-2">
+        <Skeleton className="h-10 w-full rounded-2xl bg-slate-100 dark:bg-slate-800" />
+        <Skeleton className="h-4 w-2/3 mx-auto bg-slate-100 dark:bg-slate-800" />
       </div>
     );
   }
@@ -140,7 +141,7 @@ export function RegistrationButton({
               )}
               {error.includes("cancelled") && (
                 <p className="text-xs text-red-600 mt-2">
-                  Click the button again when you're ready to complete the registration.
+                  Click the button again when you&apos;re ready to complete the registration.
                 </p>
               )}
             </div>

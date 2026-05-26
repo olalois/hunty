@@ -4,7 +4,8 @@ import { HuntControls } from "@/components/HuntControls";
 import { Button } from "@/components/ui/button";
 import { QrCode } from "lucide-react";
 import { QrCodeModal } from "@/components/QrCodeModal";
-import { StoredHunt, updateHuntStatus } from "@/lib/huntStore";
+import type { StoredHunt } from "@/lib/types";
+import { updateHuntStatus } from "@/lib/huntStore";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { RegistrationButton } from "@/components/RegistrationButton";
@@ -16,6 +17,9 @@ import {
   isWalletAvailable,
   RegistrationStatus 
 } from "@/lib/contracts/player-registration";
+import { PlayGame } from "@/components/PlayGame";
+import { GameCompleteModal } from "@/components/GameCompleteModal";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface HuntDetailProps {
   hunt: StoredHunt;
@@ -23,6 +27,9 @@ interface HuntDetailProps {
 
 export default function HuntShare({ hunt }: HuntDetailProps) {
   const router = useRouter();
+  const [isCompleteModalOpen, setIsCompleteModalOpen] = useState(false);
+  const [completionScore, setCompletionScore] = useState(0);
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [connectedPublicKey, setConnectedPublicKey] = useState<string | undefined>(undefined);
   const [walletCheckComplete, setWalletCheckComplete] = useState(false);
@@ -187,6 +194,7 @@ export default function HuntShare({ hunt }: HuntDetailProps) {
         <HuntControls
           hunt={hunt}
           connectedPublicKey={connectedPublicKey}
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           onCancelled={(huntId, txHash) => {
             markHuntCancelled(huntId)
             router.push("/hunts")
@@ -201,13 +209,36 @@ export default function HuntShare({ hunt }: HuntDetailProps) {
           playerAddress={connectedPublicKey}
           onRegister={handleRegister}
         >
-          <div className="mt-8 p-6 bg-white/5 border border-white/10 rounded-2xl">
-            <h2 className="text-2xl font-bold text-white mb-4">Hunt Clues</h2>
-            <p className="text-zinc-400">
-              You are registered for this hunt! The clues and play interface will appear here.
-            </p>
-            {/* Future: Add actual clue interface here */}
+          <div className="mt-8">
+            <PlayGame
+              hunts={[]} // PlayGame will fetch clues itself using huntId
+              gameName={hunt.title}
+              onExit={() => router.push("/")}
+              onGameComplete={(score) => {
+                // Refresh registration status to show completion/rewards
+                clearRegistrationCache(hunt.id, connectedPublicKey);
+                queryClient.invalidateQueries({ queryKey: ["registrationStatus", hunt.id, connectedPublicKey] });
+                setCompletionScore(score);
+                setIsCompleteModalOpen(true);
+              }}
+              huntId={hunt.id}
+              playerAddress={connectedPublicKey}
+            />
           </div>
+          
+          <GameCompleteModal
+            isOpen={isCompleteModalOpen}
+            onClose={() => setIsCompleteModalOpen(false)}
+            onGoHome={() => router.push("/")}
+            onReplay={() => {
+              setIsCompleteModalOpen(false);
+              // PlayGame handles internal reset or we can refetch
+            }}
+            onViewLeaderboard={() => router.push(`/?huntId=${hunt.id}&tab=leaderboard`)}
+            reward={completionScore}
+            huntId={hunt.id}
+            playerAddress={connectedPublicKey}
+          />
         </PlayInterfaceGuard>
       )}
     </div>
