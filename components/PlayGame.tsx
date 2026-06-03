@@ -5,12 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import { logger } from "@/lib/logger";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Header } from "@/components/Header";
 import { PlayerProgressPanel } from "@/components/PlayerProgressPanel";
 import { get_clue_info, get_hunt } from "@/lib/contracts/hunt";
+import { SOROBAN_READ_STALE_TIME_MS } from "@/lib/soroban/queryConfig";
 
 import { HuntCards } from "./HuntCards";
 import Replay from "./icons/Replay";
@@ -34,11 +36,11 @@ export function PlayGame({
   onGameComplete,
   gameCompleteModal,
   huntId,
-  playerAddress,
 }: PlayGameProps) {
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [score, setScore] = useState(0);
   const [solvedClues, setSolvedClues] = useState<Set<number>>(new Set());
+  const [huntEnded, setHuntEnded] = useState(false);
 
   const solvedCount = solvedClues.size;
 
@@ -65,14 +67,20 @@ export function PlayGame({
           points: clue.points,
           hint: clue.hint,
           hintCost: clue.hintCost,
+          difficulty: clue.difficulty,
         });
       }
       return { clues, huntInfo };
     },
     enabled: huntId != null,
+    staleTime: SOROBAN_READ_STALE_TIME_MS,
   });
 
   const error: string | null = queryError instanceof Error ? queryError.message : queryError ? "Failed to fetch clues" : null;
+  const fetchedClues = fetched?.clues ?? null;
+  const huntInfo = fetched?.huntInfo ?? null;
+  const hunts = huntId != null ? (fetchedClues ?? []) : (huntsProp ?? []);
+  const hasHunts = hunts.length > 0;
 
   useEffect(() => {
     setCurrentCardIndex(0);
@@ -86,10 +94,17 @@ export function PlayGame({
     }
   }, [error]);
 
-  const fetchedClues = fetched?.clues ?? null;
-  const huntInfo = fetched?.huntInfo ?? null;
-  const hunts = huntId != null ? (fetchedClues ?? []) : (huntsProp ?? []);
-  const hasHunts = hunts.length > 0;
+  // Check if hunt has ended
+  useEffect(() => {
+    if (huntInfo?.endTime) {
+      const now = Math.floor(Date.now() / 1000);
+      if (now >= huntInfo.endTime) {
+        setHuntEnded(true);
+      } else {
+        setHuntEnded(false);
+      }
+    }
+  }, [huntInfo?.endTime]);
 
   const handleScoreUpdate = (points: number) => {
     setScore((prev) => prev + points);
@@ -115,7 +130,7 @@ export function PlayGame({
             creatorEmail: huntInfo.creatorEmail,
             completionTime: new Date().toLocaleString(),
           }),
-        }).catch((err) => console.error("Failed to send notification:", err));
+        }).catch((err) => logger.error("Failed to send notification:", err));
       }
       if (huntId) {
         localStorage.setItem(`hunt_completed_${huntId}`, "true");
@@ -173,6 +188,27 @@ export function PlayGame({
           <Button variant="ghost" onClick={onExit}>
             Go Back
           </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show hunt ended message
+  if (huntEnded) {
+    return (
+      <div className="min-h-screen bg-gradient-to-tr from-blue-100 bg-purple-100 to-[#f9f9ff] flex items-center justify-center p-4">
+        <div className="w-full max-w-md space-y-6 text-center rounded-3xl bg-white dark:bg-slate-900 px-8 py-10 shadow-lg border border-slate-100 dark:border-white/5">
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
+            Hunt Ended
+          </h2>
+          <p className="text-slate-600 dark:text-slate-400 text-lg">
+            This hunt has ended. Final score: <span className="font-bold text-slate-900 dark:text-white">{score}</span>
+          </p>
+          <div className="pt-4">
+            <Button onClick={onExit} className="bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] text-white px-6 py-2 rounded-full">
+              Go Home
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -263,6 +299,7 @@ export function PlayGame({
                 currentIndex={currentCardIndex + 1}
                 totalHunts={hunts.length}
                 points={hunts[currentCardIndex]?.points}
+                huntEnded={huntEnded}
               />
             </div>
 

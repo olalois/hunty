@@ -1,5 +1,6 @@
 import Server, { TransactionBuilder, Operation } from "@stellar/stellar-sdk"
-import { getSorobanNetworkPassphrase, getSorobanRpcUrl } from "../soroban/client"
+import { SOROBAN_RPC_URL, NETWORK_PASSPHRASE } from "./config"
+import { withSorobanRpcRetry } from "../soroban/rpcRetry"
 import { RegistrationError } from "@/lib/contracts/errors"
 
 import type { PlayerProgress, RegistrationStatus, RegistrationResult } from "@/lib/types"
@@ -18,6 +19,23 @@ const RETRY_CONFIG = {
   initialDelayMs: 1000,
   maxDelayMs: 10000,
   backoffMultiplier: 2,
+  timeoutMs: 15000,
+}
+
+const NON_RETRYABLE_ERROR_CODES = [
+  "INVALID_HUNT_ID",
+  "INVALID_PLAYER_ADDRESS",
+  "WALLET_NOT_FOUND",
+  "WALLET_NOT_CONNECTED",
+  "WALLET_SIGNING_FAILED",
+  "ADDRESS_MISMATCH",
+]
+
+class NonRetryableRegistrationError extends Error {
+  constructor(public readonly original: RegistrationError) {
+    super(original.message)
+    this.name = "NonRetryableRegistrationError"
+  }
 }
 
 /**
@@ -32,42 +50,36 @@ async function withRetry<T>(
   fn: () => Promise<T>,
   retryConfig = RETRY_CONFIG
 ): Promise<T> {
-  let lastError: Error | undefined
-  let delayMs = retryConfig.initialDelayMs
-
-  for (let attempt = 1; attempt <= retryConfig.maxAttempts; attempt++) {
-    try {
-      return await fn()
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      
-      // Don't retry on validation errors or wallet errors
-      if (error instanceof RegistrationError) {
-        const nonRetryableCodes = [
-          "INVALID_HUNT_ID",
-          "INVALID_PLAYER_ADDRESS",
-          "WALLET_NOT_FOUND",
-          "WALLET_NOT_CONNECTED",
-          "WALLET_SIGNING_FAILED",
-          "ADDRESS_MISMATCH",
-        ]
-        if (error.code && nonRetryableCodes.includes(error.code)) {
+  try {
+    return await withSorobanRpcRetry(
+      async () => {
+        try {
+          return await fn()
+        } catch (error) {
+          if (
+            error instanceof RegistrationError &&
+            error.code &&
+            NON_RETRYABLE_ERROR_CODES.includes(error.code)
+          ) {
+            throw new NonRetryableRegistrationError(error)
+          }
           throw error
         }
+      },
+      {
+        maxAttempts: retryConfig.maxAttempts,
+        initialDelayMs: retryConfig.initialDelayMs,
+        maxDelayMs: retryConfig.maxDelayMs,
+        backoffMultiplier: retryConfig.backoffMultiplier,
+        timeoutMs: retryConfig.timeoutMs,
       }
-
-      // If this was the last attempt, throw the error
-      if (attempt === retryConfig.maxAttempts) {
-        break
-      }
-
-      // Wait before retrying with exponential backoff
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-      delayMs = Math.min(delayMs * retryConfig.backoffMultiplier, retryConfig.maxDelayMs)
+    )
+  } catch (error) {
+    if (error instanceof NonRetryableRegistrationError) {
+      throw error.original
     }
+    throw error
   }
-
-  throw lastError
 }
 
 /**
@@ -262,18 +274,16 @@ export async function getPlayerProgress(
 
   return withRetry(async () => {
     try {
-      const rpcUrl = getSorobanRpcUrl()
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const server = new Server(rpcUrl)
-
       // In a real implementation, this would query the contract's get_player_progress function
       // For now, we simulate the contract call using the manageData pattern
       if (typeof window !== "undefined") {
         const userPointsKey = `hunt_${huntId}_my_points`;
         const hasPoints = localStorage.getItem(userPointsKey) !== null;
+        const registeredKey = `hunt_registered_${huntId}_${playerAddress}`;
+        const isRegistered = localStorage.getItem(registeredKey) === "true";
         
-        if (hasPoints) {
-          // If the player has points, they are registered
+        if (hasPoints || isRegistered) {
+          // If the player has points or is registered, they are registered
           const isCompleted = localStorage.getItem(`hunt_completed_${huntId}`) === "true";
           const isClaimed = localStorage.getItem(`hunt_reward_claimed_${huntId}`) === "true";
           
@@ -320,6 +330,8 @@ const registrationStatusCache = new Map<string, {
   status: RegistrationStatus
   timestamp: number
 }>()
+
+const registrationStatusRequests = new Map<string, Promise<RegistrationStatus>>()
 
 /**
  * Cache TTL in milliseconds (5 minutes)
@@ -368,38 +380,50 @@ export async function checkRegistrationStatus(
     return cached.status
   }
 
-  try {
-    // Query player progress from contract
-    const progressData = await getProgressFn(huntId, playerAddress)
-
-    const status: RegistrationStatus = {
-      isRegistered: progressData !== null,
-      progressData: progressData ?? undefined,
-      loading: false,
-    }
-
-    // Cache the result
-    registrationStatusCache.set(cacheKey, {
-      status,
-      timestamp: Date.now(),
-    })
-
-    return status
-  } catch (error) {
-    const errorMessage = error instanceof RegistrationError 
-      ? error.message 
-      : error instanceof Error 
-        ? error.message 
-        : "Unable to check registration status"
-
-    const errorStatus: RegistrationStatus = {
-      isRegistered: false,
-      loading: false,
-      error: errorMessage,
-    }
-
-    return errorStatus
+  const inFlight = registrationStatusRequests.get(cacheKey)
+  if (inFlight) {
+    return inFlight
   }
+
+  const request = (async () => {
+    try {
+      // Query player progress from contract
+      const progressData = await getProgressFn(huntId, playerAddress)
+
+      const status: RegistrationStatus = {
+        isRegistered: progressData !== null,
+        progressData: progressData ?? undefined,
+        loading: false,
+      }
+
+      // Cache the result
+      registrationStatusCache.set(cacheKey, {
+        status,
+        timestamp: Date.now(),
+      })
+
+      return status
+    } catch (error) {
+      const errorMessage = error instanceof RegistrationError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Unable to check registration status"
+
+      const errorStatus: RegistrationStatus = {
+        isRegistered: false,
+        loading: false,
+        error: errorMessage,
+      }
+
+      return errorStatus
+    } finally {
+      registrationStatusRequests.delete(cacheKey)
+    }
+  })()
+
+  registrationStatusRequests.set(cacheKey, request)
+  return request
 }
 
 /**
@@ -412,6 +436,7 @@ export async function checkRegistrationStatus(
 export function clearRegistrationCache(huntId: number, playerAddress: string): void {
   const cacheKey = getCacheKey(huntId, playerAddress)
   registrationStatusCache.delete(cacheKey)
+  registrationStatusRequests.delete(cacheKey)
 }
 
 /**
@@ -441,8 +466,7 @@ export async function registerPlayer(
     }
 
     return await withRetry(async () => {
-      const rpcUrl = getSorobanRpcUrl()
-      const server = new Server(rpcUrl)
+      const server = new Server(SOROBAN_RPC_URL)
       const wallet = getWallet()
       const publicKey = await getPublicKey(wallet)
 
@@ -485,7 +509,7 @@ export async function registerPlayer(
       // Build transaction
       const tx = new TransactionBuilder(account, {
         fee: "100",
-        networkPassphrase: getSorobanNetworkPassphrase(),
+        networkPassphrase: NETWORK_PASSPHRASE,
       })
         .addOperation(op)
         .setTimeout(180)
@@ -519,6 +543,11 @@ export async function registerPlayer(
         )
       }
 
+      // Set localStorage key for registration (for mock mode)
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`hunt_registered_${huntId}_${playerAddress}`, "true");
+      }
+      
       // Clear cache after successful registration
       clearRegistrationCache(huntId, playerAddress)
 

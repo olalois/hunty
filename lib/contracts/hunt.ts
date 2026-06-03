@@ -1,12 +1,15 @@
-import Server, { TransactionBuilder, Operation } from "@stellar/stellar-sdk"
+import Server, { TransactionBuilder, Operation, Account } from "@stellar/stellar-sdk"
 import { getHunt as getStoredHunt, getHuntClues } from "@/lib/huntStore"
+import { withSorobanRpcRetry } from "@/lib/soroban/rpcRetry"
 import { normalizeNetworkError, AnswerIncorrectError } from "./errors"
 import { SOROBAN_RPC_URL, NETWORK_PASSPHRASE } from "./config"
 import { getActiveWalletAdapter } from "@/lib/walletAdapter"
+import { sha256Hex } from "@/lib/crypto"
+import { logger } from "@/lib/logger"
 
-import type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, LeaderboardEntry } from "@/lib/types"
+import type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, ExtendHuntResult, LeaderboardEntry, FastestPlayerEntry } from "@/lib/types"
 
-export type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, LeaderboardEntry }
+export type { ClueInfo, HuntInfo, CreateHuntResult, SubmitAnswerResult, ActivateHuntResult, AddClueResult, ExtendHuntResult, LeaderboardEntry, FastestPlayerEntry }
 
 // AnswerIncorrectError is re-exported from the central errors module for
 // backwards-compatible imports (e.g. `import { AnswerIncorrectError } from "@/lib/contracts/hunt"`).
@@ -52,7 +55,7 @@ export async function createHunt(
   const publicKey = await wallet.getPublicKey()
 
   // Load account state
-  const account = await server.getAccount(publicKey)
+  const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
 
   // Use manageData to carry the payload. In production you'd call the
   // Soroban contract (invoke host function) — this is a minimal signing flow
@@ -73,7 +76,9 @@ export async function createHunt(
   const signedXdr = await wallet.signTransaction(tx.toXDR())
 
   // Submit signed transaction XDR to RPC
-  const res = await server.submitTransaction(signedXdr)
+  const res = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
+    hash?: string
+  }
   if (!res || !res.hash) throw new Error("Transaction submission failed")
 
   return { txHash: res.hash }
@@ -90,7 +95,7 @@ export async function activateHunt(huntId: number): Promise<ActivateHuntResult> 
   const wallet = getActiveWalletAdapter()
   const publicKey = await wallet.getPublicKey()
 
-  const account = await server.getAccount(publicKey)
+  const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
   const payload = JSON.stringify({ action: "activate_hunt", hunt_id: huntId })
   const key = `activate_hunt:${Date.now()}`
   const op = Operation.manageData({ name: key, value: payload })
@@ -105,7 +110,9 @@ export async function activateHunt(huntId: number): Promise<ActivateHuntResult> 
 
   const signedXdr = await wallet.signTransaction(tx.toXDR())
 
-  const res = await server.submitTransaction(signedXdr)
+  const res = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
+    hash?: string
+  }
   if (!res?.hash) throw new Error("Transaction submission failed")
   return { txHash: res.hash }
 }
@@ -120,7 +127,8 @@ export async function addClue(
   answer: string,
   points: number,
   hint?: string,
-  hintCost?: number
+  hintCost?: number,
+  difficulty?: import("@/lib/types").ClueDifficulty
 ): Promise<AddClueResult> {
   if (typeof window === "undefined") throw new Error("Browser environment required")
 
@@ -128,9 +136,13 @@ export async function addClue(
   const wallet = getActiveWalletAdapter()
   const publicKey = await wallet.getPublicKey()
 
-  const normalizedAnswer = answer.trim().toLowerCase()
+  // Expect `answer` to be the pre-hashed value (SHA-256 hex) computed
+  // client-side using the scheme: sha256(lowercase(answer) + `${huntId}_${clueId}`)
+  // For backwards compatibility, if a plain-text answer is provided it will be
+  // stored as-is (legacy behaviour).
+  const normalizedAnswer = answer
 
-  const account = await server.getAccount(publicKey)
+  const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
   const payload = JSON.stringify({
     action: "add_clue",
     hunt_id: huntId,
@@ -139,6 +151,7 @@ export async function addClue(
     points,
     ...(hint ? { hint } : {}),
     ...(hintCost ? { hint_cost: hintCost } : {}),
+    ...(difficulty ? { difficulty } : {}),
   })
   const key = `add_clue:${Date.now()}`
   const op = Operation.manageData({ name: key, value: payload })
@@ -153,9 +166,51 @@ export async function addClue(
 
   const signedXdr = await wallet.signTransaction(tx.toXDR())
 
-  const res2 = await server.submitTransaction(signedXdr)
+  const res2 = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
+    hash?: string
+  }
   if (!res2?.hash) throw new Error("Transaction submission failed")
   return { txHash: res2.hash }
+}
+
+/**
+ * Calls the smart contract's extend_end_time(hunt_id: u64, new_end_time: u64) to extend a hunt's duration.
+ * Requires wallet and Soroban RPC.
+ */
+export async function extendEndTime(
+  huntId: number,
+  newEndTime: number
+): Promise<ExtendHuntResult> {
+  if (typeof window === "undefined") throw new Error("Browser environment required")
+
+  const server = new Server(SOROBAN_RPC_URL)
+  const wallet = getActiveWalletAdapter()
+  const publicKey = await wallet.getPublicKey()
+
+  const account = (await withSorobanRpcRetry(() => server.getAccount(publicKey))) as Account
+  const payload = JSON.stringify({
+    action: "extend_end_time",
+    hunt_id: huntId,
+    new_end_time: newEndTime,
+  })
+  const key = `extend_end_time:${Date.now()}`
+  const op = Operation.manageData({ name: key, value: payload })
+
+  const tx = new TransactionBuilder(account, {
+    fee: "100",
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(op)
+    .setTimeout(180)
+    .build()
+
+  const signedXdr = await wallet.signTransaction(tx.toXDR())
+
+  const res = (await withSorobanRpcRetry(() => server.submitTransaction(signedXdr))) as {
+    hash?: string
+  }
+  if (!res?.hash) throw new Error("Transaction submission failed")
+  return { txHash: res.hash, newEndTime }
 }
 
 /**
@@ -186,11 +241,79 @@ export async function get_hunt_leaderboard(huntId: number): Promise<LeaderboardE
         }
       }
     } catch (e) {
-      console.error("Failed to fetch leaderboard:", e)
+      logger.error("Failed to fetch leaderboard:", e)
     }
   }
 
   return mockData
+}
+
+export async function get_hunt_fastest_players(huntId: number): Promise<FastestPlayerEntry[]> {
+  const indexerUrl = process.env.NEXT_PUBLIC_TORII_INDEXER_URL
+
+  if (indexerUrl) {
+    try {
+      const response = await fetch(`${indexerUrl}/hunts/${huntId}/fastest-completions`, {
+        cache: "no-store",
+      })
+
+      if (response.ok) {
+        const body = await response.json()
+        type FastestCompletionRow = {
+          address?: string
+          name?: string
+          points?: number
+          completion_time_seconds?: number
+          duration_seconds?: number
+          completion_time_ms?: number
+          duration_ms?: number
+        }
+
+        const rows: FastestCompletionRow[] = Array.isArray(body?.data)
+          ? body.data
+          : Array.isArray(body?.entries)
+            ? body.entries
+            : []
+
+        if (rows.length > 0) {
+          return rows
+            .map((entry): FastestPlayerEntry | null => {
+              if (typeof entry.address !== "string") {
+                return null
+              }
+
+              return {
+                address: entry.address,
+                name: entry.name,
+                points: typeof entry.points === "number" ? entry.points : undefined,
+                completionTimeSeconds:
+                  typeof entry.completion_time_seconds === "number"
+                    ? entry.completion_time_seconds
+                    : typeof entry.duration_seconds === "number"
+                    ? entry.duration_seconds
+                    : Math.floor((Number(entry.completion_time_ms ?? entry.duration_ms ?? 0) / 1000) || 0),
+              }
+            })
+            .filter(
+              (entry): entry is FastestPlayerEntry =>
+                entry !== null && typeof entry.address === "string" && entry.completionTimeSeconds >= 0
+            )
+        }
+      }
+    } catch (error) {
+      logger.warn("Torii indexer fetch failed:", error)
+    }
+  }
+
+  const leaderboard = await get_hunt_leaderboard(huntId)
+  const sortedByPoints = [...leaderboard].sort((a, b) => b.points - a.points)
+
+  return sortedByPoints.map((entry, index) => ({
+    address: entry.address,
+    name: entry.name,
+    points: entry.points,
+    completionTimeSeconds: 600 + index * 90,
+  }))
 }
 
 /**
@@ -234,7 +357,7 @@ export async function get_clue_info(huntId: number, clueId: number): Promise<Clu
       try {
         localStorage.setItem(`hunt_clue_start_${huntId}_${clue.id}`, Date.now().toString())
       } catch (e) {
-        console.error("Failed to set start time:", e)
+        logger.error("Failed to set start time:", e)
       }
     }
 
@@ -244,10 +367,68 @@ export async function get_clue_info(huntId: number, clueId: number): Promise<Clu
       points: clue.points,
       hint: clue.hint,
       hintCost: clue.hintCost,
+      difficulty: clue.difficulty,
     }
   } catch (error) {
     throw normalizeNetworkError(error, "Failed to fetch clue")
   }
+}
+
+/**
+ * Polls the Soroban RPC for transaction inclusion.
+ * Resolves to true if successful, throws if failed or timed out.
+ */
+export async function pollTransaction(txHash: string): Promise<boolean> {
+  if (typeof window === "undefined") return true;
+  if (txHash.startsWith("mock_tx_")) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return true;
+  }
+
+  const server = new Server(SOROBAN_RPC_URL);
+  const maybeServer = server as typeof server & {
+    getTransaction?: (hash: string) => Promise<{ status: string }>
+  }
+  
+  for (let i = 0; i < 15; i++) {
+    try {
+      // Try using stellar-sdk SorobanRpc method if available
+      if (typeof maybeServer.getTransaction === "function") {
+        const res = await maybeServer.getTransaction(txHash);
+        if (res && res.status !== "NOT_FOUND" && res.status !== "PENDING") {
+          if (res.status === "SUCCESS") return true;
+          throw new Error(`Transaction failed with status: ${res.status}`);
+        }
+      } else {
+        // Fallback to raw JSON-RPC
+        const rpcRes = await fetch(SOROBAN_RPC_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getTransaction",
+            params: { hash: txHash }
+          })
+        }).then(r => r.json());
+        
+        if (rpcRes?.result) {
+          const status = rpcRes.result.status;
+          if (status !== "NOT_FOUND" && status !== "PENDING") {
+            if (status === "SUCCESS") return true;
+            throw new Error(`Transaction failed with status: ${status}`);
+          }
+        }
+      }
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message.includes("Transaction failed")) {
+        throw e;
+      }
+      logger.warn("Polling error:", e)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("Transaction polling timed out after 30 seconds");
 }
 
 /**
@@ -266,10 +447,18 @@ export async function submitAnswer(
   if (!clue) throw new Error(`Clue ${clueId} not found for hunt ${huntId}`)
 
   const userAnswer = answer.trim().toLowerCase()
-  const possibleAnswers = clue.answer.toLowerCase().split("|").map((a) => a.trim())
 
-  if (!possibleAnswers.includes(userAnswer)) {
-    throw new AnswerIncorrectError()
+  // Detect stored hashed answer (hex SHA-256) vs legacy plain answers.
+  const stored = clue.answer || ""
+  const isHexSha256 = /^[a-f0-9]{64}$/i.test(stored)
+
+  if (isHexSha256) {
+    const salt = `${huntId}_${clue.id}`
+    const hashed = await sha256Hex(userAnswer + salt)
+    if (hashed !== stored) throw new AnswerIncorrectError()
+  } else {
+    const possibleAnswers = stored.toLowerCase().split("|").map((a) => a.trim())
+    if (!possibleAnswers.includes(userAnswer)) throw new AnswerIncorrectError()
   }
 
   // Calculate speed bonus
@@ -296,7 +485,7 @@ export async function submitAnswer(
         localStorage.setItem(solvedKey, "true");
       }
     } catch (e) {
-      console.error("Failed to update local clue state in localStorage after answer submission:", e)
+      logger.error("Failed to update local clue state in localStorage after answer submission:", e)
     }
   }
 

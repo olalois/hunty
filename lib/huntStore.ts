@@ -7,13 +7,18 @@ import type { HuntStatus, StoredHunt, Clue } from "@/lib/types"
 
 export type { HuntStatus, StoredHunt, Clue }
 
+export type HuntStoreSnapshot = {
+  hunts: StoredHunt[]
+  clues: Clue[]
+}
+
 const STORAGE_KEY = "hunty_hunts"
 const CLUES_KEY = "hunty_clues"
 
 // Seed timestamps: active hunts end 7 days from first load, completed hunts in the past.
 const NOW_SECONDS = Math.floor(Date.now() / 1000)
 
-const SEED_HUNTS: StoredHunt[] = [
+export const SEED_HUNTS: StoredHunt[] = [
   {
     id: 1,
     title: "City Secrets",
@@ -21,6 +26,9 @@ const SEED_HUNTS: StoredHunt[] = [
     cluesCount: 5,
     status: "Active",
     rewardType: "XLM",
+    rewardPool: 150,
+    playerCount: 32,
+    createdAt: NOW_SECONDS - 2 * 86400,
     startTime: NOW_SECONDS - 86400,
     endTime: NOW_SECONDS + 7 * 86400,
   },
@@ -31,6 +39,9 @@ const SEED_HUNTS: StoredHunt[] = [
     cluesCount: 7,
     status: "Active",
     rewardType: "NFT",
+    rewardPool: 40,
+    playerCount: 21,
+    createdAt: NOW_SECONDS - 4 * 86400,
     startTime: NOW_SECONDS - 2 * 86400,
     endTime: NOW_SECONDS + 3 * 86400,
   },
@@ -41,6 +52,9 @@ const SEED_HUNTS: StoredHunt[] = [
     cluesCount: 4,
     status: "Completed",
     rewardType: "Both",
+    rewardPool: 250,
+    playerCount: 14,
+    createdAt: NOW_SECONDS - 12 * 86400,
     startTime: NOW_SECONDS - 10 * 86400,
     endTime: NOW_SECONDS - 5 * 86400,
   },
@@ -51,6 +65,9 @@ const SEED_HUNTS: StoredHunt[] = [
     cluesCount: 3,
     status: "Draft",
     rewardType: "XLM",
+    rewardPool: 80,
+    playerCount: 0,
+    createdAt: NOW_SECONDS - 3 * 86400,
   },
   {
     id: 5,
@@ -59,6 +76,9 @@ const SEED_HUNTS: StoredHunt[] = [
     cluesCount: 0,
     status: "Draft",
     rewardType: "NFT",
+    rewardPool: 25,
+    playerCount: 0,
+    createdAt: NOW_SECONDS - 86400,
   },
 ]
 
@@ -120,13 +140,23 @@ export function getCreatorHunts(): StoredHunt[] {
 }
 
 /** Get hunts for a creator (creator public-key filter not implemented yet; returns all hunts). */
-export function getHuntsByCreator(): StoredHunt[] {
-  return readHunts()
+export function getHuntsByCreator(creator?: string): StoredHunt[] {
+  if (!creator) return readHunts()
+  return readHunts().filter((hunt) => {
+    const withCreator = hunt as StoredHunt & { creator?: string }
+    return !withCreator.creator || withCreator.creator === creator
+  })
 }
 
 /** Update a hunt's status (e.g. Draft → Active after activate_hunt). */
 export function updateHuntStatus(huntId: number, status: HuntStatus): void {
   const hunts = readHunts().map((h) => (h.id === huntId ? { ...h, status } : h))
+  writeHunts(hunts)
+}
+
+/** Update a hunt's end time (e.g. after extend_end_time). */
+export function updateHuntEndTime(huntId: number, newEndTime: number): void {
+  const hunts = readHunts().map((h) => (h.id === huntId ? { ...h, endTime: newEndTime } : h))
   writeHunts(hunts)
 }
 
@@ -167,7 +197,7 @@ export function getHuntClues(huntId: number): Clue[] {
 }
 
 /** Persist a new clue locally and increment the hunt's cluesCount. */
-export function saveClueLocally(clue: Omit<Clue, "id">): void {
+export function saveClueLocally(clue: Omit<Clue, "id">): number {
   const all = readClues()
   const newId = all.length > 0 ? Math.max(...all.map((c) => c.id)) + 1 : 1
   writeClues([...all, { ...clue, id: newId }])
@@ -175,6 +205,32 @@ export function saveClueLocally(clue: Omit<Clue, "id">): void {
     h.id === clue.huntId ? { ...h, cluesCount: h.cluesCount + 1 } : h
   )
   writeHunts(hunts)
+  return newId
+}
+
+/** Update an existing clue's answer or other fields. Returns true if updated. */
+export function updateClueAnswer(huntId: number, clueId: number, answer: string): boolean {
+  const all = readClues()
+  const idx = all.findIndex((c) => c.huntId === huntId && c.id === clueId)
+  if (idx === -1) return false
+  const updated = [...all]
+  updated[idx] = { ...updated[idx], answer }
+  writeClues(updated)
+  return true
+}
+
+/** Snapshot current hunts/clues for optimistic UI rollback. */
+export function takeHuntStoreSnapshot(): HuntStoreSnapshot {
+  return {
+    hunts: readHunts(),
+    clues: readClues(),
+  }
+}
+
+/** Restore hunts/clues after an optimistic update fails. */
+export function restoreHuntStoreSnapshot(snapshot: HuntStoreSnapshot): void {
+  writeHunts(snapshot.hunts)
+  writeClues(snapshot.clues)
 }
 
 /** Get a single hunt by string ID */
@@ -214,4 +270,13 @@ export function getFeaturedHunts(limit = 3): StoredHunt[] {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => s.hunt)
+}
+
+/** Set/unset a hunt as the featured Hunt of the Week in local storage. */
+export function setLocalFeaturedHunt(huntId: number | null): void {
+  const hunts = readHunts().map((h) => ({
+    ...h,
+    isFeaturedOfWeek: h.id === huntId ? true : false,
+  }))
+  writeHunts(hunts)
 }

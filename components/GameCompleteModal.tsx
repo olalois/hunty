@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
+import Image from "next/image"
 import confetti from "canvas-confetti"
 
 import { Button } from "@/components/ui/button"
@@ -10,7 +11,9 @@ import Replay from "@/components/icons/Replay"
 import { RewardsPanel } from "@/components/RewardsPanel"
 import { useQuery } from "@tanstack/react-query"
 import { checkRegistrationStatus } from "@/lib/contracts/player-registration"
+import { SOROBAN_READ_STALE_TIME_MS } from "@/lib/soroban/queryConfig"
 import { useRef, useState } from "react"
+import { useXlmUsdPrice } from "@/hooks/useXlmUsdPrice"
 import { AchievementCertificate } from "@/components/AchievementCertificate"
 import { downloadElementAsImage, shareOnTwitter, shareOnFarcaster } from "@/lib/downloadAsImage"
 import { Share2, Twitter, Download } from "lucide-react"
@@ -21,6 +24,9 @@ import {
   DropdownMenuTrigger 
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
+import { ACHIEVEMENTS } from "@/lib/achievements/config"
+import { checkAndAwardAchievements } from "@/lib/achievements/service"
+import { logger } from "@/lib/logger"
 
 interface GameCompleteModalProps {
   isOpen: boolean
@@ -43,13 +49,26 @@ export function GameCompleteModal({
   huntId,
   playerAddress,
 }: GameCompleteModalProps) {
+  const { price: xlmUsdPrice } = useXlmUsdPrice();
+
+  const currencyFormatter = new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+
+  const usdEquivalent =
+    xlmUsdPrice != null ? currencyFormatter.format(reward * xlmUsdPrice) : null;
+
   const certificateRef = useRef<HTMLDivElement>(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [newAchievements, setNewAchievements] = useState<string[]>([])
 
   const { data: registrationStatus } = useQuery({
     queryKey: ["registrationStatus", huntId, playerAddress],
     queryFn: () => (huntId && playerAddress ? checkRegistrationStatus(huntId, playerAddress) : null),
     enabled: isOpen && !!huntId && !!playerAddress,
+    staleTime: SOROBAN_READ_STALE_TIME_MS,
   });
 
   const playerProgress = registrationStatus?.progressData ? {
@@ -65,8 +84,36 @@ export function GameCompleteModal({
         spread: 80,
         origin: { y: 0.6 }
       });
+
+      // Check and award achievements on hunt completion
+      if (playerAddress) {
+        try {
+          const earned = checkAndAwardAchievements(playerAddress, {
+            totalHuntsCompleted: 1, // This is a completion
+            totalHuntsWon: 1, // Assuming 1st place = win
+            totalNftsEarned: 0,
+            fastestCompletionSeconds: undefined,
+          })
+
+          if (earned.length > 0) {
+            setNewAchievements(earned)
+            // Show toast for each new achievement
+            earned.forEach((achievementId) => {
+              const achievement = ACHIEVEMENTS[achievementId as keyof typeof ACHIEVEMENTS]
+              if (achievement) {
+                toast.success(`🎉 Achievement Unlocked: ${achievement.title}!`, {
+                  description: achievement.description,
+                  duration: 5000,
+                })
+              }
+            })
+          }
+        } catch (error) {
+          logger.error("Failed to check achievements:", error)
+        }
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, playerAddress]);
 
   const handleShareAchievement = async (platform?: "twitter" | "farcaster") => {
     if (!certificateRef.current) return
@@ -88,7 +135,7 @@ export function GameCompleteModal({
         toast.success("Achievement image downloaded! You can now share it manually.")
       }
     } catch (error) {
-      console.error("Failed to share achievement:", error)
+      logger.error("Failed to share achievement:", error)
       toast.error("Failed to generate achievement image.")
     } finally {
       setIsGenerating(false)
@@ -106,15 +153,50 @@ export function GameCompleteModal({
           <div className="flex items-center justify-center gap-2 text-2xl">
             <span>🥇</span>
             <span className="bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] bg-clip-text text-transparent text-2xl font-bold">1st Place</span>
-          </div>
-
-          <div className="flex items-center justify-center gap-2 w-full">
+          </div>            <div className="flex items-center justify-center gap-2 w-full">
             <p className="bg-gradient-to-b from-[#3737A4] to-[#0C0C4F] bg-clip-text text-transparent text-xl font-normal  mb-2">You won</p>
-            <div className="flex items-center justify-center gap-2 bg-[#e5e5eb] p-2 rounded-xl w-[230px]">
-              <Coin />
-              <span className="font-bold text-lg">{reward}</span>
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center justify-center gap-2 bg-[#e5e5eb] p-2 rounded-xl w-[230px]">
+                <Coin />
+                <span className="font-bold text-lg">{reward}</span>
+              </div>
+              {usdEquivalent && (
+                <span className="text-sm text-slate-500">
+                  ≈ {usdEquivalent}
+                </span>
+              )}
             </div>
           </div>
+
+          {/* New Achievements Display */}
+          {newAchievements.length > 0 && (
+            <div className="mt-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/20 dark:to-orange-900/20 rounded-xl border border-yellow-200 dark:border-yellow-800">
+              <p className="text-sm font-semibold text-yellow-900 dark:text-yellow-200 mb-3">
+                🎉 New Achievements Unlocked!
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {newAchievements.map((achievementId) => {
+                  const achievement = ACHIEVEMENTS[achievementId as keyof typeof ACHIEVEMENTS]
+                  return achievement ? (
+                    <div
+                      key={achievementId}
+                      className="flex items-center gap-2 p-2 bg-white dark:bg-slate-800 rounded-lg"
+                    >
+                      <span className="text-2xl">{achievement.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                          {achievement.title}
+                        </p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 truncate">
+                          {achievement.description}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null
+                })}
+              </div>
+            </div>
+          )}
 
           {playerProgress && (
             <div className="mt-6 border-t border-slate-100 pt-6">

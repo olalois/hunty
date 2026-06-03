@@ -14,7 +14,7 @@ import type { WalletProvider } from "@/lib/walletAdapter";
 interface WalletModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Pass the `connect` function from useFreighterWallet() */
+  /** Pass the `connect` function from useWallet() */
   onConnect: (provider: WalletProvider) => Promise<{ error?: string }>;
 }
 
@@ -37,7 +37,7 @@ export function WalletModal({ isOpen, onClose, onConnect }: WalletModalProps) {
       return;
     }
 
-    // Success — close modal, state is managed by useFreighterWallet in parent
+    // Success — close modal, state is managed by useWallet in parent
     handleClose();
   };
 
@@ -59,6 +59,7 @@ export function WalletModal({ isOpen, onClose, onConnect }: WalletModalProps) {
             variant="ghost"
             size="icon"
             onClick={handleClose}
+            aria-label="Close wallet modal"
             className="h-6 w-6 rounded-full bg-pink-500 hover:bg-pink-600 text-white"
           >
             <X className="h-4 w-4" />
