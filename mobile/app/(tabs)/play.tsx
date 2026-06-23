@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { ThemedButton, ThemedCustomText, ThemedView } from '@components/themed';
 import { EmptyState } from '@components/EmptyState';
@@ -10,12 +10,21 @@ import type { Clue } from '@lib/types';
 import { useToast } from '@providers/ToastProvider';
 import { ClueMarkdownRenderer } from '@components/ClueMarkdownRenderer';
 import { verifyClueGeofence } from '@/lib/locationGate';
+import { usePlayerLocation } from '@app/hooks/usePlayerLocation';
 
 export default function PlayScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { showToast } = useToast();
   const { network } = useWalletStore();
+  const {
+    location,
+    error: locationError,
+    loading: locationLoading,
+    permissionGranted,
+    shareLocation,
+    setShareLocation,
+  } = usePlayerLocation();
   const {
     currentProgress,
     updateClueIndex,
@@ -130,6 +139,42 @@ export default function PlayScreen() {
           <ThemedCustomText variant="body">{progressLabel}</ThemedCustomText>
         </View>
 
+        <View style={[styles.locationCard, { backgroundColor: colors.background, borderColor: colors.border }]}> 
+          <View style={styles.locationHeader}> 
+            <ThemedCustomText variant="label" weight="700">
+              Location services
+            </ThemedCustomText>
+            <Switch
+              value={shareLocation}
+              onValueChange={setShareLocation}
+              disabled={!permissionGranted}
+              trackColor={{ false: '#cbd5e1', true: colors.primary }}
+            />
+          </View>
+          <ThemedCustomText variant="caption" style={styles.locationCopy}>
+            {permissionGranted
+              ? shareLocation
+                ? 'GPS tracking is enabled for live geofence checks and low-power updates.'
+                : 'Location sharing is paused. Clues can still be checked using a one-time GPS read.'
+              : 'Allow location access to use location-based clues and geofencing.'}
+          </ThemedCustomText>
+          {locationLoading ? (
+            <ThemedCustomText variant="caption" color="warning">
+              Requesting location access…
+            </ThemedCustomText>
+          ) : null}
+          {locationError ? (
+            <ThemedCustomText variant="caption" color="error">
+              {locationError}
+            </ThemedCustomText>
+          ) : null}
+          {location ? (
+            <ThemedCustomText variant="caption" style={styles.locationMeta}>
+              Live coordinates: {location.latitude.toFixed(4)}, {location.longitude.toFixed(4)}
+            </ThemedCustomText>
+          ) : null}
+        </View>
+
         {clues.map((clue, index) => {
           const isActive = index === activeClueIndex && !allSolved;
           const isUnlocked = index <= activeClueIndex;
@@ -226,6 +271,23 @@ const styles = StyleSheet.create({
   },
   clueMeta: {
     opacity: 0.75,
+  },
+  locationCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    gap: 8,
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  locationCopy: {
+    opacity: 0.8,
+  },
+  locationMeta: {
+    opacity: 0.65,
   },
   answerPanel: {
     borderRadius: 16,
