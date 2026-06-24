@@ -3,6 +3,7 @@
 import { HuntControls } from "@/components/HuntControls";
 import { Button } from "@/components/ui/button";
 import { QrCode, Trophy } from "lucide-react";
+import dynamic from "next/dynamic";
 import { QrCodeModal } from "@/components/QrCodeModal";
 import type { StoredHunt } from "@/lib/types";
 import { updateHuntStatus } from "@/lib/huntStore";
@@ -17,12 +18,20 @@ import {
   isWalletAvailable,
   RegistrationStatus 
 } from "@/lib/contracts/player-registration";
-import { PlayGame } from "@/components/PlayGame";
-import { GameCompleteModal } from "@/components/GameCompleteModal";
 import { useQueryClient } from "@tanstack/react-query";
 import { debounce } from "@/lib/debounce";
 import { REGISTRATION_STATUS_DEBOUNCE_MS } from "@/lib/soroban/queryConfig";
 import { queryKeys } from "@/lib/queryKeys";
+
+const PlayGame = dynamic(
+  () => import("@/components/PlayGame").then((mod) => mod.PlayGame),
+  { ssr: false }
+)
+
+const GameCompleteModal = dynamic(
+  () => import("@/components/GameCompleteModal").then((mod) => mod.GameCompleteModal),
+  { ssr: false }
+)
 
 interface HuntDetailProps {
   hunt: StoredHunt;

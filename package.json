@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "analyze": "ANALYZE=true next build",
+    "bundle:check": "node scripts/check-bundle-size.mjs",
     "start": "next start",
     "lint": "next lint",
     "test": "vitest --run",
@@ -55,6 +57,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.11.1",
     "@eslint/eslintrc": "^3",
+    "@next/bundle-analyzer": "^15.5.19",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",

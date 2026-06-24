@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useWindowVirtualizer } from "@tanstack/react-virtual"
 import Image from "next/image"
 import Link from "next/link"
+import dynamic from "next/dynamic"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -16,16 +17,37 @@ import { getAllHunts, getHunt, type StoredHunt } from "@/lib/huntStore"
 import { LeaderboardTable } from "@/components/LeaderBoardTable"
 import { HuntOfTheWeekBanner } from "@/components/HuntOfTheWeekBanner"
 import { hankenGrotesk } from "@/lib/font"
-import OnboardingTour from "@/components/OnboardingTour"
-import { GlobalActivityFeed } from "@/components/GlobalActivityFeed"
-import { FeaturedHunts } from "@/components/FeaturedHunts"
 import { HuntCoverImage } from "@/components/HuntCoverImage"
 import { Footer } from "@/components/Footer"
 import { usePlayerCounts } from "@/hooks/usePlayerCounts"
 import { useRecentlyCompleted } from "@/hooks/useRecentlyCompleted"
-import { RecentlyCompletedSection } from "@/components/RecentlyCompletedSection"
 import type { PlayerCountResult } from "@/lib/types"
 import { queryCachePolicy, queryKeys } from "@/lib/queryKeys"
+
+const OnboardingTour = dynamic(() => import("@/components/OnboardingTour"), {
+  ssr: false,
+})
+
+const FeaturedHunts = dynamic(
+  () => import("@/components/FeaturedHunts").then((mod) => mod.FeaturedHunts),
+  {
+    loading: () => <Skeleton className="h-44 w-full rounded-2xl" />,
+  }
+)
+
+const GlobalActivityFeed = dynamic(
+  () => import("@/components/GlobalActivityFeed").then((mod) => mod.GlobalActivityFeed),
+  {
+    loading: () => <Skeleton className="h-40 w-full rounded-2xl" />,
+  }
+)
+
+const RecentlyCompletedSection = dynamic(
+  () => import("@/components/RecentlyCompletedSection").then((mod) => mod.RecentlyCompletedSection),
+  {
+    loading: () => <Skeleton className="h-40 w-full rounded-2xl" />,
+  }
+)
 
 interface WalletOption {
   id: string
