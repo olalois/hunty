@@ -1,5 +1,6 @@
+import { Suspense } from "react";
 import { Header } from "@/components/Header";
-import { getHunt } from "@/lib/huntStore";
+import { getAllHunts, getHunt } from "@/lib/huntStore";
 import type { HuntStatus } from "@/lib/types";
 import { formatTimestamp } from "@/lib/dateUtils";
 import { Metadata } from "next";
@@ -7,7 +8,7 @@ import { notFound } from "next/navigation";
 import HuntDetailClient from "./share";
 import { HuntCountdown } from "./HuntCountdown";
 import { FastestPlayersStrip } from "@/components/FastestPlayersStrip";
-import { StructuredData, huntStructuredData } from "@/components/StructuredData";
+import HuntPageSkeleton from "./loading";
 
 export async function generateMetadata({
   params,
@@ -78,8 +79,11 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-const page = async ({ params }: PageProps) => {
-  const { id } = await params;
+export function generateStaticParams() {
+  return getAllHunts().map((hunt) => ({ id: String(hunt.id) }));
+}
+
+async function HuntPageContent({ id }: { id: string }) {
   const huntDetails = await getHunt(id);
   if (!huntDetails) return notFound();
 
@@ -169,6 +173,16 @@ const page = async ({ params }: PageProps) => {
         <HuntDetailClient hunt={huntDetails}  />
       </div>
     </div>
+  );
+}
+
+const page = async ({ params }: PageProps) => {
+  const { id } = await params;
+
+  return (
+    <Suspense fallback={<HuntPageSkeleton />}>
+      <HuntPageContent id={id} />
+    </Suspense>
   );
 };
 
