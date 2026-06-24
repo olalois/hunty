@@ -1,4 +1,5 @@
 import Server from "@stellar/stellar-sdk";
+import { createSorobanRpcOptimizer } from "./rpcOptimization";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const SorobanServer = Server as any;
@@ -33,9 +34,19 @@ function getNetworkPassphrase(): string {
  * Creates a Soroban Server instance for the configured RPC URL.
  * Uses the same Server API as soroban-client (stellar-sdk is the maintained package).
  */
+let sharedServer: any | null = null;
+let sharedServerRpcUrl: string | null = null;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSorobanServer(): any {
-  return new SorobanServer(getRpcUrl());
+  const rpcUrl = getRpcUrl();
+  if (sharedServer && sharedServerRpcUrl === rpcUrl) {
+    return sharedServer;
+  }
+
+  sharedServer = new SorobanServer(rpcUrl);
+  sharedServerRpcUrl = rpcUrl;
+  return sharedServer;
 }
 
 /**
@@ -50,4 +61,28 @@ export function getSorobanNetworkPassphrase(): string {
  */
 export function getSorobanRpcUrl(): string {
   return getRpcUrl();
+}
+
+let sharedOptimizer: ReturnType<typeof createSorobanRpcOptimizer> | null = null
+
+export function getSorobanRpcOptimizer(): ReturnType<typeof createSorobanRpcOptimizer> {
+  if (!sharedOptimizer) {
+    sharedOptimizer = createSorobanRpcOptimizer({
+      primaryRpcUrl: getRpcUrl(),
+      fallbackRpcUrl: process.env.NEXT_PUBLIC_SOROBAN_FALLBACK_RPC_URL,
+      debounceMs: Number(process.env.NEXT_PUBLIC_SOROBAN_DEBOUNCE_MS ?? 50),
+      ttlMs: Number(process.env.NEXT_PUBLIC_SOROBAN_READ_TTL_MS ?? 30_000),
+    })
+  }
+
+  return sharedOptimizer
+}
+
+export async function readSorobanContractState<T>(request: {
+  key: string
+  method: string
+  params?: unknown[]
+  parser?: (response: unknown) => unknown
+}): Promise<T> {
+  return getSorobanRpcOptimizer().readContractState<T>(request)
 }
